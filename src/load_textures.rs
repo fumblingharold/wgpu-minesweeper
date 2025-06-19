@@ -1,6 +1,7 @@
 use wgpu::util::DeviceExt;
 use crate::texture;
 
+/// [`Vertex`]s for a cell in minesweeper.
 const GRID_VERTICES: &[texture::Vertex] = &[
     texture::Vertex { position: [0.0, 0.0, 0.0], tex_coords: [0.0 , 0.25], }, // A
     texture::Vertex { position: [0.0, 1.0, 0.0], tex_coords: [0.0 , 0.0 ], }, // B
@@ -8,13 +9,15 @@ const GRID_VERTICES: &[texture::Vertex] = &[
     texture::Vertex { position: [1.0, 1.0, 0.0], tex_coords: [0.25, 0.0 ], }, // D
 ];
 
+/// Indices for a cell in minesweeper.
 const GRID_INDICES: &[u16] = &[
     0, 2, 1,
     1, 2, 3,
 ];
 
+/// Creates an [`texture::Object`] for the minesweeper grid.
 pub fn get_grid_texture(device: &wgpu::Device, queue: &wgpu::Queue,
-                        bind_group_layout: &wgpu::BindGroupLayout, width: u32, height: u32) -> texture::Object {
+                        bind_group_layout: &wgpu::BindGroupLayout, width: u8, height: u8) -> texture::Object {
 
     let diffuse_bytes = include_bytes!("Grid.png");
     let texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, Some("Grid Texture"))
@@ -62,8 +65,7 @@ pub fn get_grid_texture(device: &wgpu::Device, queue: &wgpu::Queue,
         })
     }).collect::<Vec<_>>();
 
-    let mut instance_data = instances.iter().map(texture::Instance::to_raw).collect::<Vec<_>>();
-    //instance_data.reverse();
+    let instance_data = instances.iter().map(texture::Instance::to_raw).collect::<Vec<_>>();
 
     let instance_buffer = device.create_buffer_init(
         &wgpu::util::BufferInitDescriptor {

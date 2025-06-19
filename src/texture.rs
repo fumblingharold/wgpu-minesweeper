@@ -1,9 +1,9 @@
 use image::GenericImageView;
 use anyhow::*;
 use wgpu::util::DeviceExt;
-use crate::minesweeper;
 use crate::minesweeper::CellImage;
 
+/// A vertex from a mesh.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -12,9 +12,12 @@ pub struct Vertex {
 }
 
 impl Vertex {
-    // Needs to be stored as a constant as vertex_attr_array! returns a temporary value
+    /// Attributes for buffer layout.
+    /// Needs to be stored as a constant as vertex_attr_array! returns a temporary value
     const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
-    pub(crate) fn desc() -> wgpu::VertexBufferLayout<'static> {
+
+    /// Returns a buffer layout for [`Vertex`].
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
@@ -23,6 +26,7 @@ impl Vertex {
     }
 }
 
+/// An instance of an object.
 #[derive(Debug)]
 pub struct Instance {
     pub vertex_translation: [f32; 2],
@@ -31,13 +35,12 @@ pub struct Instance {
 }
 
 impl Instance {
+    /// Convert an [`Instance`] to an [`InstanceRaw`] to be loaded into a buffer.
     pub fn to_raw(&self) -> InstanceRaw {
         let x_scale = self.vertex_scale[0];
         let y_scale = self.vertex_scale[1];
         let x_trans = self.vertex_translation[0];// / x_scale;
         let y_trans = self.vertex_translation[1];// / y_scale;
-        //println!("(x_trans, y_trans): ({}, {})", x_trans, y_trans);
-        //println!("{:?}", self);
         let thing = InstanceRaw {
             tex_coords: self.tex_cord_translation,
             model_matrix: [
@@ -51,6 +54,7 @@ impl Instance {
     }
 }
 
+/// An instance of an object in a GPU friendly format.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct InstanceRaw {
@@ -59,6 +63,7 @@ pub struct InstanceRaw {
 }
 
 impl InstanceRaw {
+    /// Returns a buffer layout for [`InstanceRaw`].
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: size_of::<InstanceRaw>() as wgpu::BufferAddress,
@@ -92,12 +97,9 @@ impl InstanceRaw {
             ],
         }
     }
-
-    pub fn dummy_val() -> Instance {
-        Instance { vertex_translation: [0.0; 2], vertex_scale: [1.0, 1.0], tex_cord_translation: [0.0; 2], }
-    }
 }
 
+/// A texture in GPU friendly format.
 pub struct Texture {
     #[allow(unused)]
     pub texture: wgpu::Texture,
@@ -118,11 +120,12 @@ pub struct Object {
 }
 
 impl Object {
+    /// Updates the instance buffer to reflect the current state of instances.
     pub fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let unused_buffer_bytes = self.instance_buffer.size() as usize - self.instances.len() * size_of::<[f32; 16]>();
+        let buffer_large_enough = self.instance_buffer.size() as usize >= self.instances.len() * size_of::<[f32; 16]>();
         let instance_data = self.instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
         let new_buffer_data = bytemuck::cast_slice(&instance_data);
-        if unused_buffer_bytes >= 0 {
+        if buffer_large_enough {
             queue.write_buffer(&self.instance_buffer, 0, &new_buffer_data);
         } else {
             self.instance_buffer = device.create_buffer_init(
@@ -134,6 +137,8 @@ impl Object {
             );
         }
     }
+
+    /// Updates the instance buffer at the given index using instances.
     pub fn update_instance(&mut self, queue: &wgpu::Queue, index: usize) {
         let instance_data = [self.instances[index].to_raw()];
         let new_buffer_data = bytemuck::cast_slice(&instance_data);
@@ -181,12 +186,14 @@ impl Texture {
         Self {texture, view, sampler, }
     }
 
+    /// Creates a texture using the given bytes as an image.
     pub fn from_bytes(device: &wgpu::Device, queue: &wgpu::Queue, bytes: &[u8], label: Option<&str>)
                       -> Result<Self> {
         let image = image::load_from_memory(bytes)?;
         Self::from_image(device, queue, &image, label)
     }
 
+    /// Creates a texture using the given image.
     pub fn from_image(device: &wgpu::Device, queue: &wgpu::Queue, image: &image::DynamicImage, label: Option<&str>)
                       -> Result<Self> {
         let rgba = image.to_rgba8();
@@ -256,6 +263,7 @@ impl Texture {
     }
 }
 
+/// Returns the texture coordinates for the given [`CellImage`]. This is based on the texture atlas in `Grid.png`.
 pub fn get_tex_coords(image: &CellImage) -> [f32; 2] {
     match image {
         CellImage::Zero => [0.0, 0.5],
