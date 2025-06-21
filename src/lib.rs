@@ -11,9 +11,9 @@ use winit::{
     window::WindowBuilder,
 };
 
-const DEFAULT_WIDTH: u8 = 8;
-const DEFAULT_HEIGHT: u8 = 8;
-const DEFAULT_MINES: u16 = 12;
+const DEFAULT_WIDTH: minesweeper::Dim = 8;
+const DEFAULT_HEIGHT: minesweeper::Dim = 8;
+const DEFAULT_MINES: minesweeper::Count = 12;
 
 /// Stores info on how to scale each instance to fit the window as an x-scaling and a y-scaling.
 struct Scaling {
@@ -22,7 +22,7 @@ struct Scaling {
 
 impl Scaling {
     /// Updates the camera based on the given window size and game aspect ratio.
-    fn rescale(&mut self, win_size: &winit::dpi::PhysicalSize<u32>, (aspect_ratio_height, aspect_ratio_width): (f32, f32)) {
+    fn rescale(&mut self, win_size: &winit::dpi::PhysicalSize<u32>, aspect_ratio_height: f32, aspect_ratio_width: f32) {
         let width = win_size.width as f32;
         let height = win_size.height as f32;
         let window_ratio = (width * aspect_ratio_height) / (height * aspect_ratio_width);
@@ -47,6 +47,7 @@ impl Scaling {
 }
 
 /// Stores info on how to scale each instance to fit the window as a 4x4 scaling matrix.
+/// Uses #[repr(C)] for wgsl shader compatability.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct ScalingUniform {
@@ -285,6 +286,7 @@ impl<'a> State<'a> {
         // Set up textures for grid
         let objects = vec![
             load_textures::get_grid_texture(&device, &queue, &texture_bind_group_layout, DEFAULT_WIDTH, DEFAULT_HEIGHT),
+            load_textures::get_border_texture(&device, &queue, &texture_bind_group_layout, DEFAULT_WIDTH, DEFAULT_HEIGHT),
         ];
 
         Self {
@@ -317,7 +319,7 @@ impl<'a> State<'a> {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.scaling.rescale(&self.size, (self.minesweeper_grid.height() as f32, self.minesweeper_grid.width() as f32));
+            self.scaling.rescale(&self.size, self.minesweeper_grid.height as f32 + 64.0 / 16.0, self.minesweeper_grid.width as f32 + 21.0 / 16.0);
             self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
         }
     }
@@ -325,6 +327,55 @@ impl<'a> State<'a> {
     /// Handles user inputs to the window.
     fn input(&mut self, event: &WindowEvent) -> bool {
         match event {
+            WindowEvent::KeyboardInput { event, .. } => {
+                match event.physical_key {
+                    PhysicalKey::Code(KeyCode::KeyR) if event.state.is_pressed() => {
+                        self.minesweeper_grid.reset();
+                        for (instance, image) in self.objects[0].instances.iter_mut().zip(self.minesweeper_grid.get_all_images().iter().flatten()) {
+                            instance.tex_cord_translation = texture::get_tex_coords(&image);
+                        }
+                        self.objects[0].update(&self.device, &self.queue);
+                        self.window.request_redraw();
+                        true
+                    },
+                    _ => false,
+                }
+            },
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_pos.x =
+                    (position.x / self.size.width as f64 + self.scaling.scaling.x as f64 / 2.0 - 0.5)
+                        / self.scaling.scaling.x as f64;
+                self.cursor_pos.y =
+                    (position.y / self.size.height as f64 + self.scaling.scaling.y as f64 / 2.0 - 0.5)
+                        / self.scaling.scaling.y as f64;
+                true
+            },
+            WindowEvent::MouseInput { state: mouse_state, button, .. }
+            if mouse_state.is_pressed() => {
+                self.cursor_pos = load_textures::convert_to_over_grid(self.minesweeper_grid.width, self.minesweeper_grid.height, self.cursor_pos);
+                if self.cursor_pos.x >= 0.0 && self.cursor_pos.x < 1.0
+                    && self.cursor_pos.y >= 0.0 && self.cursor_pos.y < 1.0 {
+                    let row = ((1.0 - self.cursor_pos.y) * self.minesweeper_grid.height as f64) as u8;
+                    let col = (self.cursor_pos.x * self.minesweeper_grid.width as f64) as u8;
+                    let grid_object = &mut self.objects[0];
+                    let result =
+                        if button == &MouseButton::Left {
+                            self.minesweeper_grid.left_click((row, col))
+                        } else if button == &MouseButton::Right {
+                            self.minesweeper_grid.right_click((row, col))
+                        } else {
+                            Vec::new()
+                        };
+                    result.into_iter().for_each(|((row, col), image)| {
+                        let index = row as usize * self.minesweeper_grid.width as usize + col as usize;
+                        grid_object.instances[index].tex_cord_translation = texture::get_tex_coords(&image);
+                        grid_object.update_instance(&self.queue, index);
+                    });
+                    self.window.request_redraw();
+                    return true;
+                }
+                false
+            },
             _ => false,
         }
     }
@@ -438,50 +489,6 @@ pub async fn run() {
                         },
                         ..
                     } => control_flow.exit(),
-                    WindowEvent::KeyboardInput { event, .. } => {
-                        match event.physical_key {
-                            PhysicalKey::Code(KeyCode::KeyR) if event.state.is_pressed() => {
-                                state.minesweeper_grid.reset();
-                                for (instance, image) in state.objects[0].instances.iter_mut().zip(state.minesweeper_grid.get_all_images().iter().flatten()) {
-                                    instance.tex_cord_translation = texture::get_tex_coords(&image);
-                                }
-                                state.objects[0].update(&state.device, &state.queue);
-                                state.window.request_redraw();
-                            },
-                            _ => {},
-                        }
-                    },
-                    WindowEvent::CursorMoved { position, .. } => {
-                        state.cursor_pos.x =
-                            (position.x / state.size.width as f64 + state.scaling.scaling.x as f64 / 2.0 - 0.5)
-                                / state.scaling.scaling.x as f64;
-                        state.cursor_pos.y =
-                            (position.y / state.size.height as f64 + state.scaling.scaling.y as f64 / 2.0 - 0.5)
-                                / state.scaling.scaling.y as f64;
-                    },
-                    WindowEvent::MouseInput { state: mouse_state, button, .. }
-                    if mouse_state.is_pressed() => {
-                        if state.cursor_pos.x >= 0.0 && state.cursor_pos.x < 1.0
-                            && state.cursor_pos.y >= 0.0 && state.cursor_pos.y < 1.0 {
-                            let row = ((1.0 - state.cursor_pos.y) * state.minesweeper_grid.height() as f64) as u8;
-                            let col = (state.cursor_pos.x * state.minesweeper_grid.width() as f64) as u8;
-                            let grid_object = &mut state.objects[0];
-                            let result =
-                                if button == &MouseButton::Left {
-                                    state.minesweeper_grid.left_click((row, col))
-                                } else if button == &MouseButton::Right {
-                                    state.minesweeper_grid.right_click((row, col))
-                                } else {
-                                    Vec::new()
-                                };
-                            result.into_iter().for_each(|(row, col, image)| {
-                                let index = row as usize * state.minesweeper_grid.width() as usize + col as usize;
-                                grid_object.instances[index].tex_cord_translation = texture::get_tex_coords(&image);
-                                grid_object.update_instance(&state.queue, index);
-                            });
-                            state.window.request_redraw();
-                        }
-                    },
                     _ => {}
                 }
             },

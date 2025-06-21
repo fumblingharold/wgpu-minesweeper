@@ -4,6 +4,7 @@ use wgpu::util::DeviceExt;
 use crate::minesweeper::CellImage;
 
 /// A vertex from a mesh.
+/// Uses #[repr(C)] for wgsl shader compatability.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
@@ -55,6 +56,7 @@ impl Instance {
 }
 
 /// An instance of an object in a GPU friendly format.
+/// Uses #[repr(C)] for wgsl shader compatability.
 #[repr(C)]
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct InstanceRaw {

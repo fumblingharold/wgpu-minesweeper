@@ -2,7 +2,13 @@ use std::cmp::PartialEq;
 use std::ops::{Index, IndexMut};
 use rand::Rng;
 
-/// All the different textures a Cell can have.
+pub type Row = u8;
+pub type Col = u8;
+pub type Pos = (Row, Col);
+pub type Dim = u8;
+pub type Count = u16;
+
+/// All the different textures a [`Cell`] can have.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CellImage {
     Zero,
@@ -83,7 +89,7 @@ struct GameGrid {
 impl GameGrid {
     /// Resizes to the given width and height. Fills the grid with [`Cell`]s where `mine = false`
     /// and texture [`CellImage::Hidden`].
-    fn resize(&mut self, width: u8, height: u8) {
+    fn resize(&mut self, width: Dim, height: Dim) {
         if height != self.height() || width != self.width() {
             let cell = Cell { image: CellImage::Hidden, mine: false };
             self.data = vec![vec![cell; width as usize]; height as usize];
@@ -91,26 +97,26 @@ impl GameGrid {
     }
 
     /// Gives the width of the grid.
-    fn width(&self) -> u8 {
+    fn width(&self) -> Dim {
         if self.height() == 0 { 0 } else { self.data[0].len() as u8 }
     }
 
     /// Gives the height of the grid.
-    pub fn height(&self) -> u8 {
+    pub fn height(&self) -> Dim {
         self.data.len() as u8
     }
 }
 
-impl Index<(u8, u8)> for GameGrid {
+impl Index<Pos> for GameGrid {
     type Output = Cell;
 
-    fn index(&self, (row, col): (u8, u8)) -> &Self::Output {
+    fn index(&self, (row, col): Pos) -> &Self::Output {
         &self.data[row as usize][col as usize]
     }
 }
 
-impl IndexMut<(u8, u8)> for GameGrid {
-    fn index_mut(&mut self, (row, col): (u8, u8)) -> &mut Self::Output {
+impl IndexMut<Pos> for GameGrid {
+    fn index_mut(&mut self, (row, col): Pos) -> &mut Self::Output {
         &mut self.data[row as usize][col as usize]
     }
 }
@@ -122,16 +128,16 @@ impl IndexMut<(u8, u8)> for GameGrid {
 pub struct Game {
     grid: GameGrid,
     game_state: GameState,
-    width: u8,
-    height: u8,
-    flags: u16,
-    hidden: u16,
-    total_mines: u16,
+    pub width: Dim,
+    pub height: Dim,
+    pub flags: Count,
+    hidden: Count,
+    pub total_mines: Count,
 }
 
 impl Game {
     /// Creates a new game of minesweeper with the given dimensions and number of mines. Panics if the inputs are invalid.
-    pub fn new(width: u8, height: u8, mines: u16) -> Self {
+    pub fn new(width: Dim, height: Dim, mines: Count) -> Self {
         assert!(width as u16 * height as u16 > mines && width != 0 && height != 0 && mines != 0, "Invalid grid");
         Game {
             grid: GameGrid { data: Vec::new() },
@@ -139,13 +145,13 @@ impl Game {
             width,
             height,
             flags: 0,
-            hidden: width as u16 * height as u16,
+            hidden: width as Count * height as Count,
             total_mines: mines,
         }
     }
 
     /// Resets the game and resizes the grid to the given inputs.
-    pub fn resize(&mut self, width: u8, height: u8, num_mines: u16) {
+    pub fn resize(&mut self, width: Dim, height: Dim, num_mines: Count) {
         self.reset();
         self.width = width;
         self.height = height;
@@ -160,8 +166,8 @@ impl Game {
     /// Performs the left click operations for minesweeper. Reveals the given [`Cell`] if it has the image
     /// [`CellImage::Hidden`] or all the [`Cell`]s with image [`CellImage::Hidden`] around the given [`Cell`]
     /// if it is shown. Does not perform any actions if the [`GameState`] is [`GameState::AfterGame`].
-    pub fn left_click(&mut self, pos: (u8, u8)) -> Vec<(u8, u8, CellImage)> {
-        assert!(pos.0 < self.height() && pos.1 < self.width(), "left_click invalid location: {:?}", pos);
+    pub fn left_click(&mut self, pos: Pos) -> Vec<(Pos, CellImage)> {
+        assert!(pos.0 < self.height && pos.1 < self.width, "left_click invalid location: {:?}", pos);
         let mut result = Vec::new();
         if self.game_state == GameState::BeforeGame {
             self.start_game(pos);
@@ -185,8 +191,8 @@ impl Game {
     /// Performs the right click operations for minesweeper. This toggles [`Cell`]s images when
     /// hidden from [`CellImage::Hidden`] to [`CellImage::Flagged`] and other hidden values to
     /// [`CellImage::Hidden`].
-    pub fn right_click(&mut self, pos: (u8, u8)) -> Vec<(u8, u8, CellImage)> {
-        assert!(pos.0 < self.height() && pos.1 < self.width(), "toggle_flag invalid location");
+    pub fn right_click(&mut self, pos: Pos) -> Vec<(Pos, CellImage)> {
+        assert!(pos.0 < self.height && pos.1 < self.width, "toggle_flag invalid location");
         // Does nothing if the cell is shown, otherwise toggle the flag
         if self.game_state == GameState::BeforeGame
             || self.game_state == GameState::AfterGame
@@ -199,7 +205,7 @@ impl Game {
 
     /// Reveal the given [`Cell`]s and returns a list of tuples giving the row, column, and
     /// [`CellImage`] for every [`Cell`] texture updated. Performs 0 propagation.
-    fn show(&mut self, mut cells: Vec<(u8, u8)>) -> Vec<(u8, u8, CellImage)> {
+    fn show(&mut self, mut cells: Vec<Pos>) -> Vec<(Pos, CellImage)> {
         // If any of the cells are mines, end the game
         for pos in cells.iter_mut() { // Check if each cell is a mine
             let cell = &mut self.grid[*pos];
@@ -207,16 +213,16 @@ impl Game {
             if cell.mine {
                 self.game_state = GameState::AfterGame;
                 cell.image = CellImage::SelectedMine;
-                let mut result = vec!((pos.0, pos.1, CellImage::SelectedMine));
-                for row in 0..self.height() {
-                    for col in 0..self.width() {
+                let mut result = vec!(((pos.0, pos.1), CellImage::SelectedMine));
+                for row in 0..self.height {
+                    for col in 0..self.width {
                         let cell = &mut self.grid[(row, col)];
                         if cell.mine && cell.image == CellImage::Hidden {
                             cell.image = CellImage::Mine;
-                            result.push((row, col, cell.image.clone()));
+                            result.push(((row, col), cell.image.clone()));
                         } else if !cell.mine && cell.image == CellImage::Flagged {
                             cell.image = CellImage::WronglyFlagged;
-                            result.push((row, col, cell.image.clone()));
+                            result.push(((row, col), cell.image.clone()));
                         }
                     }
                 };
@@ -236,7 +242,7 @@ impl Game {
             // Change the cells image to reflect the number of mines around it
             let mines_around = self.get_mines_around(pos);
             self.grid[pos].image = CellImage::from_number(mines_around);
-            result.push((pos.0, pos.1, CellImage::from_number(mines_around)));
+            result.push((pos, CellImage::from_number(mines_around)));
             // If the cell is a 0, add its neighbors to the stack
             if mines_around == 0 {
                 cells.append(&mut self.get_hidden_neighbors(pos));
@@ -247,23 +253,23 @@ impl Game {
 
     /// Toggles the given [`Cell`] to [`CellImage::Hidden`] if it is anything else and to
     /// [`CellImage::Flagged`] if it is [`CellImage::Hidden`].
-    fn toggle_tofrom_hidden(&mut self, pos: (u8, u8)) -> (u8, u8, CellImage) {
+    fn toggle_tofrom_hidden(&mut self, pos: Pos) -> (Pos, CellImage) {
         self.toggle_tofrom_given(pos, CellImage::Hidden)
     }
 
     /// Toggles the given [`Cell`] to [`CellImage::QuestionMarked`] if it is anything else and to
     /// [`CellImage::Flagged`] if it is [`CellImage::QuestionMarked`].
-    fn toggle_tofrom_question_marked(&mut self, pos: (u8, u8)) -> (u8, u8, CellImage) {
+    fn toggle_tofrom_question_marked(&mut self, pos: Pos) -> (Pos, CellImage) {
         self.toggle_tofrom_given(pos, CellImage::QuestionMarked)
     }
 
     /// Toggles the given [`Cell`] to the given [`CellImage`] if it is anything else and to
     /// [`CellImage::Flagged`] if it is the given [`CellImage`].
-    fn toggle_tofrom_given(&mut self, (row, col): (u8, u8), given: CellImage) -> (u8, u8, CellImage) {
-        assert!(row < self.height() && col < self.width(), "invalid location");
+    fn toggle_tofrom_given(&mut self, pos: Pos, given: CellImage) -> (Pos, CellImage) {
+        assert!(pos.1 < self.height && pos.0 < self.width, "invalid location");
         //let mut cell = &mut self.grid[row as usize][col as usize];
-        let cell =  &mut self.grid[(row, col)];
-        (row, col,
+        let cell =  &mut self.grid[pos];
+        (pos,
          if cell.image == given {
              cell.image = CellImage::Flagged;
              self.flags += 1;
@@ -278,44 +284,36 @@ impl Game {
         )
     }
 
-    fn handle_win(&mut self) -> Vec<(u8, u8, CellImage)> {
+    fn handle_win(&mut self) -> Vec<(Pos, CellImage)> {
+        self.game_state = GameState::AfterGame;
         let mut result = Vec::new();
-        for row in 0..self.height() {
-            for col in 0..self.width() {
-                let cell = &mut self.grid[(row, col)];
+        for row in 0..self.height {
+            for col in 0..self.width {
+                let pos = (row, col);
+                let cell = &mut self.grid[pos];
                 if cell.mine && cell.image != CellImage::Flagged {
                     cell.image = CellImage::Flagged;
-                    result.push((row, col, cell.image.clone()));
+                    result.push((pos, cell.image.clone()));
                 }
             }
         }
         result
     }
 
-    /// Gives the width of the game.
-    pub fn width(&self) -> u8 {
-        self.width
-    }
-
-    /// Gives the height of the game.
-    pub fn height(&self) -> u8 {
-        self.height
-    }
-
     /// Returns a 2D vector of [`CellImage`]s matching up with each [`Cell`]'s texture.
     pub fn get_all_images(&self) -> Vec<Vec<CellImage>> {
-        let mut result = Vec::with_capacity(self.height() as usize);
+        let mut result = Vec::with_capacity(self.height as usize);
         if self.game_state == GameState::BeforeGame {
-            for _ in 0..self.height() {
-                let mut row = Vec::with_capacity(self.width() as usize);
-                for _ in 0..self.width() {
+            for _ in 0..self.height {
+                let mut row = Vec::with_capacity(self.width as usize);
+                for _ in 0..self.width {
                     row.push(CellImage::Hidden);
                 }
                 result.push(row);
             }
         } else {
             self.grid.data.iter().for_each(|row| {
-                let mut row_image = Vec::with_capacity(self.width() as usize);
+                let mut row_image = Vec::with_capacity(self.width as usize);
                 row.iter().for_each(|cell| {
                     row_image.push(cell.image.clone());
                 });
@@ -328,12 +326,14 @@ impl Game {
     /// Starts the game of minesweeper: resizes the grid to widthxheight, fills the grid with
     /// mines, and changes the [`GameState`] to [`GameState::DuringGame`]. A mine will never be
     /// placed in the given row and col and the surrounding [`cell`]s will be avoided if possible.
-    fn start_game(&mut self, (row, col): (u8, u8)) {
+    // OWEN: the fact that you felt the need to explain what you're doing in this function implies
+    // that you need nicer abstractions
+    fn start_game(&mut self, (row, col): Pos) {
         self.game_state = GameState::DuringGame;
-        self.hidden = self.height() as u16 * self.width() as u16;
+        self.hidden = self.height as u16 * self.width as u16;
         self.flags = 0;
-        let width = self.width();
-        let height = self.height();
+        let width = self.width;
+        let height = self.height;
         //If the grid is the wrong size, resize it
         self.grid.resize(width, height);
         // Finds all cells that should not be mines
@@ -383,7 +383,7 @@ impl Game {
     }
 
     /// Returns the locations of all adjacent [`Cell`]s with [`CellImage::Hidden`].
-    fn get_hidden_neighbors(&self, pos: (u8, u8)) -> Vec<(u8, u8)> {
+    fn get_hidden_neighbors(&self, pos: Pos) -> Vec<Pos> {
         self.get_neighbors(pos)
             .into_iter()
             .filter(|pos| self.grid[*pos].image == CellImage::Hidden)
@@ -391,7 +391,7 @@ impl Game {
     }
 
     /// Returns the locations of all adjacent [`Cell`]s.
-    fn get_neighbors(&self, (row, col): (u8, u8)) -> Vec<(u8, u8)> {
+    fn get_neighbors(&self, (row, col): Pos) -> Vec<Pos> {
         let mut result = self.get_3x3((row, col));
         for index in 0..result.len() {
             if result[index] == (row, col) {
@@ -403,19 +403,19 @@ impl Game {
     }
 
     /// Returns the locations of all adjacent [`Cell`]s and the [`Cell`] itself.
-    fn get_3x3(&self, (row, col): (u8, u8)) -> Vec<(u8, u8)> {
+    fn get_3x3(&self, (row, col): Pos) -> Vec<Pos> {
         let mut result = Vec::with_capacity(8);
         let row = row as i16;
         let col = col as i16;
-        let height = self.height() as i16;
-        let width = self.width() as i16;
+        let height = self.height as i16;
+        let width = self.width as i16;
         for row_difference in -1..=1 {
             let neighbor_row = row + row_difference;
             if neighbor_row >= 0 && neighbor_row < height {
                 for col_difference in -1..=1 {
                     let neighbor_col = col + col_difference;
                     if neighbor_col >= 0 && neighbor_col < width {
-                        result.push((neighbor_row as u8, neighbor_col as u8))
+                        result.push((neighbor_row as Row, neighbor_col as Col))
                     }
                 }
             }
@@ -426,7 +426,7 @@ impl Game {
     /// Finds the number of mines surrounding the [`Cell`] at the given row and col.
     /// Technically includes the cell in the count but since this function should never be called
     /// on a mine that should never cause issues.
-    fn get_mines_around(&self, pos: (u8, u8)) -> u8 {
+    fn get_mines_around(&self, pos: Pos) -> u8 {
         let mut num_mines = 0;
         for pos in self.get_3x3(pos) {
             if self.grid[pos].mine {
