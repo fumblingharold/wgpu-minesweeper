@@ -1,7 +1,9 @@
 mod texture;
 mod minesweeper;
 mod load_textures;
+mod seven_segment;
 
+use std::time::Instant;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 use winit::{
@@ -10,10 +12,11 @@ use winit::{
     keyboard::{KeyCode, PhysicalKey},
     window::WindowBuilder,
 };
+use winit::event_loop::EventLoopWindowTarget;
 
-const DEFAULT_WIDTH: minesweeper::Dim = 8;
-const DEFAULT_HEIGHT: minesweeper::Dim = 8;
-const DEFAULT_MINES: minesweeper::Count = 12;
+const DEFAULT_WIDTH: minesweeper::Dim = 9;
+const DEFAULT_HEIGHT: minesweeper::Dim = 9;
+const DEFAULT_MINES: minesweeper::Count = 10;
 
 /// Stores info on how to scale each instance to fit the window as an x-scaling and a y-scaling.
 struct Scaling {
@@ -78,13 +81,14 @@ struct State<'a> {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    objects: Vec<texture::Object>,
+    objects: texture::Objects,
     scaling: Scaling,
     scaling_buffer: wgpu::Buffer,
     scaling_bind_group: wgpu::BindGroup,
     depth_texture: texture::Texture,
     minesweeper_grid: minesweeper::Game,
     cursor_pos: cgmath::Vector2<f64>,
+    seconds_since_game_start: u32,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
@@ -189,7 +193,6 @@ impl<'a> State<'a> {
 
         // GPU friendly form of Scaling
         let scaling_uniform = ScalingUniform::new(&scaling);
-
         let scaling_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
                 label: Some("Scaling Buffer"),
@@ -197,7 +200,6 @@ impl<'a> State<'a> {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }
         );
-
         let scaling_bind_group_layout = device.create_bind_group_layout(
             &wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -213,7 +215,6 @@ impl<'a> State<'a> {
                 label: Some("Scaling Bind Group Layout"),
             }
         );
-
         let scaling_bind_group = device.create_bind_group(
             &wgpu::BindGroupDescriptor {
                 layout: &scaling_bind_group_layout,
@@ -232,7 +233,6 @@ impl<'a> State<'a> {
             bind_group_layouts: &[&texture_bind_group_layout, &scaling_bind_group_layout],
             push_constant_ranges: &[],
         });
-
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
@@ -256,7 +256,7 @@ impl<'a> State<'a> {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
+                cull_mode: None,
                 // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
                 polygon_mode: wgpu::PolygonMode::Fill,
                 // Requires Features::DEPTH_CLIP_CONTROL
@@ -284,10 +284,8 @@ impl<'a> State<'a> {
         let minesweeper_grid = minesweeper::Game::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_MINES);
 
         // Set up textures for grid
-        let objects = vec![
-            load_textures::get_grid_texture(&device, &queue, &texture_bind_group_layout, DEFAULT_WIDTH, DEFAULT_HEIGHT),
-            load_textures::get_border_texture(&device, &queue, &texture_bind_group_layout, DEFAULT_WIDTH, DEFAULT_HEIGHT),
-        ];
+        let objects = texture::Objects::new(&device, &queue, &texture_bind_group_layout,
+                                            DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_MINES);
 
         Self {
             window,
@@ -304,12 +302,8 @@ impl<'a> State<'a> {
             depth_texture,
             cursor_pos: cgmath::Vector2::new(0.0, 0.0),
             minesweeper_grid,
+            seconds_since_game_start: 0,
         }
-    }
-
-    /// Returns the State's window.
-    fn window(&self) -> &Window {
-        &self.window
     }
 
     /// Handles updating the State with a new window size.
@@ -319,22 +313,25 @@ impl<'a> State<'a> {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.scaling.rescale(&self.size, self.minesweeper_grid.height as f32 + 64.0 / 16.0, self.minesweeper_grid.width as f32 + 21.0 / 16.0);
+            self.scaling.rescale(&self.size, self.minesweeper_grid.height as f32 + 64.0 / 16.0,
+                                 self.minesweeper_grid.width as f32 + 21.0 / 16.0);
             self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
         }
     }
 
     /// Handles user inputs to the window.
-    fn input(&mut self, event: &WindowEvent) -> bool {
-        match event {
+    fn input(&mut self, event: &WindowEvent, control_flow: &EventLoopWindowTarget<()>) -> bool {
+        let flags = self.minesweeper_grid.flags;
+        let game_state = self.minesweeper_grid.game_state.clone();
+        let result = match event {
             WindowEvent::KeyboardInput { event, .. } => {
                 match event.physical_key {
                     PhysicalKey::Code(KeyCode::KeyR) if event.state.is_pressed() => {
                         self.minesweeper_grid.reset();
-                        for (instance, image) in self.objects[0].instances.iter_mut().zip(self.minesweeper_grid.get_all_images().iter().flatten()) {
-                            instance.tex_cord_translation = texture::get_tex_coords(&image);
+                        for (instance, image) in self.objects.grid.instances.iter_mut().zip(self.minesweeper_grid.get_all_images().iter().flatten()) {
+                            instance.tex_cord_translation = texture::get_cell_tex_coords(&image);
                         }
-                        self.objects[0].update(&self.device, &self.queue);
+                        self.objects.grid.update(&self.device, &self.queue);
                         self.window.request_redraw();
                         true
                     },
@@ -357,7 +354,7 @@ impl<'a> State<'a> {
                     && self.cursor_pos.y >= 0.0 && self.cursor_pos.y < 1.0 {
                     let row = ((1.0 - self.cursor_pos.y) * self.minesweeper_grid.height as f64) as u8;
                     let col = (self.cursor_pos.x * self.minesweeper_grid.width as f64) as u8;
-                    let grid_object = &mut self.objects[0];
+                    let grid_object = &mut self.objects.grid;
                     let result =
                         if button == &MouseButton::Left {
                             self.minesweeper_grid.left_click((row, col))
@@ -368,16 +365,40 @@ impl<'a> State<'a> {
                         };
                     result.into_iter().for_each(|((row, col), image)| {
                         let index = row as usize * self.minesweeper_grid.width as usize + col as usize;
-                        grid_object.instances[index].tex_cord_translation = texture::get_tex_coords(&image);
+                        grid_object.instances[index].tex_cord_translation = texture::get_cell_tex_coords(&image);
                         grid_object.update_instance(&self.queue, index);
                     });
                     self.window.request_redraw();
-                    return true;
+                    true
+                } else {
+                    false
                 }
-                false
             },
             _ => false,
-        }
+        };
+        // If the grid changed, check if displays need to be updated
+        if result {
+            if flags != self.minesweeper_grid.flags {
+                let new_val = self.minesweeper_grid.total_mines as i32 - self.minesweeper_grid.flags as i32;
+                self.objects.update_display(seven_segment::Display::MinesUnflagged, new_val, &self.queue);
+            }
+            if game_state != self.minesweeper_grid.game_state {
+                use minesweeper::GameState::*;
+                control_flow.set_control_flow(
+                    match self.minesweeper_grid.game_state {
+                        BeforeGame => {
+                            self.seconds_since_game_start = 0;
+                            self.objects.update_display(seven_segment::Display::Timer, self.seconds_since_game_start as i32, &self.queue);
+                            self.window.request_redraw();
+                            winit::event_loop::ControlFlow::Wait
+                        },
+                        DuringGame => winit::event_loop::ControlFlow::WaitUntil(
+                            Instant::now() + std::time::Duration::from_secs_f32(1.0)),
+                        AfterGame => winit::event_loop::ControlFlow::Wait,
+                    });
+            }
+        };
+        result
     }
 
     /// Update the scaling_buffer in the GPU using the ScalingUniform.
@@ -425,7 +446,9 @@ impl<'a> State<'a> {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(1, &self.scaling_bind_group, &[]);
 
-            for object in &self.objects {
+            let objects = self.objects.get_objects();
+
+            for object in objects {
                 render_pass.set_bind_group(0, &object.bind_group, &[]);
                 render_pass.set_vertex_buffer(0, object.vertex_buffer.slice(..));
                 render_pass.set_vertex_buffer(1, object.instance_buffer.slice(..));
@@ -452,17 +475,18 @@ pub async fn run() {
 
     event_loop.run(move |event, control_flow| {
         match event {
-            Event::NewEvents(StartCause::Init) => control_flow.set_control_flow(
-                winit::event_loop::ControlFlow::wait_duration(std::time::Duration::from_secs_f32(1.0 / 60.0))),
+            Event::NewEvents(StartCause::Init) => { state.window.set_title("Minesweeper"); },
             Event::NewEvents(StartCause::ResumeTimeReached {start: _, requested_resume}) => {
+                state.seconds_since_game_start += 1;
                 control_flow.set_control_flow(
-                    winit::event_loop::ControlFlow::WaitUntil(requested_resume + std::time::Duration::from_secs_f32(1.0 / 60.0)));
+                    winit::event_loop::ControlFlow::WaitUntil(requested_resume + std::time::Duration::from_secs_f32(1.0)));
+                state.objects.update_display(seven_segment::Display::Timer, state.seconds_since_game_start as i32, &state.queue);
                 state.window.request_redraw();
             }
             Event::WindowEvent {
                 ref event,
                 window_id,
-            } if window_id == state.window.id() => if !state.input(event) {
+            } if window_id == state.window.id() => if !state.input(event, &control_flow) {
                 match event {
                     WindowEvent::RedrawRequested => {
                         match state.render() {
@@ -478,6 +502,7 @@ pub async fn run() {
                     WindowEvent::Resized(physical_size) => {
                         state.resize(*physical_size);
                         state.update();
+                        state.window.request_redraw();
                     }
                     WindowEvent::CloseRequested
                     | WindowEvent::KeyboardInput {

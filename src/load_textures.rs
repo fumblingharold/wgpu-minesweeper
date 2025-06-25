@@ -1,26 +1,34 @@
 use wgpu::util::DeviceExt;
-use crate::{minesweeper, texture};
+use crate::{minesweeper, texture, seven_segment};
 
+/// Hard coded information about the number of pixels in the textures.
 const FRAME_WIDTHS: [u8; 2] = [12, 8];
 const FRAME_HEIGHTS: [u8; 4] = [8, 11, 33, 12];
-const GRID_LENGTH: f32 = 16.0;
+const GRID_LENGTH_F64: f64 = 16.0;
+const GRID_LENGTH_F32: f32 = 16.0;
+const GRID_LENGTH_U16: u16 = 16;
 
+/// Returns the width of the minesweeper game in pixels given the grid's width.
 pub fn get_total_pixel_width(width: minesweeper::Dim) -> u16 {
-    width as u16 * 16 + FRAME_WIDTHS.iter().sum::<u8>() as u16
+    width as u16 * GRID_LENGTH_U16 + FRAME_WIDTHS.iter().sum::<u8>() as u16
 }
 
+/// Returns the height of the minesweeper game in pixels given the grid's height.
 pub fn get_total_pixel_height(height: minesweeper::Dim) -> u16 {
-    height as u16 * 16 + FRAME_HEIGHTS.iter().sum::<u8>() as u16
+    height as u16 * GRID_LENGTH_U16 + FRAME_HEIGHTS.iter().sum::<u8>() as u16
 }
 
+/// Rescaled and translates a position on the image to be relative to the grid.
+///
+/// Should change implementation so not needed.
 pub fn convert_to_over_grid(width: minesweeper::Dim, height: minesweeper::Dim, pos: cgmath::Vector2<f64>) -> cgmath::Vector2<f64> {
     let pwidth = get_total_pixel_width(width) as f64;
     let pheight = get_total_pixel_height(height) as f64;
-    cgmath::Vector2::new((pos.x * pwidth - FRAME_WIDTHS[0] as f64) / width as f64 / 16.0,
-                         (pos.y * pheight - FRAME_HEIGHTS[1..4].iter().sum::<u8>() as f64) / height as f64 / 16.0)
+    cgmath::Vector2::new((pos.x * pwidth - FRAME_WIDTHS[0] as f64) / width as f64 / GRID_LENGTH_F64,
+                         (pos.y * pheight - FRAME_HEIGHTS[1..4].iter().sum::<u8>() as f64) / height as f64 / GRID_LENGTH_F64)
 }
 
-/// [`Vertex`]s for a cell in minesweeper.
+/// [Vertex]s for a cell in minesweeper.
 const GRID_VERTICES: &[texture::Vertex] = &[
     texture::Vertex { position: [0.0, 0.0, 0.0], tex_coords: [0.0 , 0.25], }, // A
     texture::Vertex { position: [0.0, 1.0, 0.0], tex_coords: [0.0 , 0.0 ], }, // B
@@ -34,23 +42,24 @@ const GRID_INDICES: &[u16] = &[
     1, 2, 3,
 ];
 
-/// Creates a [`texture::Object`] for the minesweeper grid.
+/// Creates a [texture::Object] for the minesweeper grid.
 pub fn get_grid_texture(device: &wgpu::Device, queue: &wgpu::Queue,
-                        bind_group_layout: &wgpu::BindGroupLayout, width: u8, height: u8) -> texture::Object {
+                        bind_group_layout: &wgpu::BindGroupLayout,
+                        width: minesweeper::Dim, height: minesweeper::Dim) -> texture::Object {
     // Load grid textures into memory and create a Texture from it
     let diffuse_bytes = include_bytes!("Grid.png");
 
     // Create instance data
     let half_total_pixel_width = get_total_pixel_width(width) as f32 / 2.0;
     let half_total_pixel_height = get_total_pixel_height(height) as f32 / 2.0;
-    let tex_cord_translation = texture::get_tex_coords(&minesweeper::CellImage::Hidden);
+    let tex_cord_translation = texture::get_cell_tex_coords(&minesweeper::CellImage::Hidden);
     let instances = (0..height).flat_map(|row| {
         (0..width).map(move |col| {
             texture::Instance {
                 vertex_translation: [
-                    (FRAME_WIDTHS[0] as f32 + col as f32 * GRID_LENGTH) / half_total_pixel_width - 1.0,
-                    (FRAME_HEIGHTS[0] as f32 + row as f32 * GRID_LENGTH) / half_total_pixel_height - 1.0],
-                vertex_scale: [GRID_LENGTH / half_total_pixel_width, GRID_LENGTH / half_total_pixel_height],
+                    (FRAME_WIDTHS[0] as f32 + col as f32 * GRID_LENGTH_F32) / half_total_pixel_width - 1.0,
+                    (FRAME_HEIGHTS[0] as f32 + row as f32 * GRID_LENGTH_F32) / half_total_pixel_height - 1.0],
+                vertex_scale: [GRID_LENGTH_F32 / half_total_pixel_width, GRID_LENGTH_F32 / half_total_pixel_height],
                 tex_cord_translation,
             }
         })
@@ -59,9 +68,10 @@ pub fn get_grid_texture(device: &wgpu::Device, queue: &wgpu::Queue,
     build_texture(device, queue, bind_group_layout, "Grid".parse().unwrap(), diffuse_bytes, GRID_INDICES, instances, GRID_VERTICES)
 }
 
-/// Creates a [`texture::Object`] for the minesweeper border.
+/// Creates a [texture::Object] for the minesweeper border.
 pub fn get_border_texture(device: &wgpu::Device, queue: &wgpu::Queue,
-                          bind_group_layout: &wgpu::BindGroupLayout, width: u8, height: u8) -> texture::Object {
+                          bind_group_layout: &wgpu::BindGroupLayout,
+                          width: minesweeper::Dim, height: minesweeper::Dim) -> texture::Object {
     // Load grid textures into memory and create a Texture from it
     let image_data = include_bytes!("Frame.png");
 
@@ -111,6 +121,65 @@ pub fn get_border_texture(device: &wgpu::Device, queue: &wgpu::Queue,
     build_texture(device, queue, bind_group_layout, name, image_data, frame_indices, instances, frame_vertices)
 }
 
+/// Creates a [texture::Object] for the minesweeper numbers.
+pub fn get_number_texture(device: &wgpu::Device, queue: &wgpu::Queue,
+                          bind_group_layout: &wgpu::BindGroupLayout,
+                          width: minesweeper::Dim, height: minesweeper::Dim,
+                          mines: minesweeper::Count) -> texture::Object {
+    // Load grid textures into memory and create a Texture from it
+    let image_data = include_bytes!("Numbers.png");
+
+    // Create index data
+    let indices = [0, 2, 1, 1, 2, 3];
+
+    // Create instance data
+    let width = width as f32 * 16.0;
+    let height = height as f32 * 16.0;
+    let total_width = width + 20.0;
+    let total_height = height + 64.0;
+    let left_top_corners = [17.0, total_width - 15.0 - 13.0 * 3.0];
+    let mut instances = Vec::with_capacity(6);
+    let mut digits = seven_segment::get_texture_coords(mines as i32)
+        .into_iter()
+        .chain([[0.0, 1.0 / 12.0]; 2].into_iter())
+        .chain([[0.0, 11.0 / 12.0]; 1].into_iter());
+    for top_left_corner in left_top_corners.iter() {
+        for digit in 0..3 {
+            instances.push(texture::Instance {
+                vertex_translation: [(top_left_corner + 13.0 * digit as f32) / total_width * 2.0 - 1.0, -40.0 / total_height * 2.0 + 1.0],
+                vertex_scale: [13.0 / total_width * 2.0, 23.0 / total_height * 2.0],
+                tex_cord_translation: digits.next().unwrap(),
+            });
+        }
+    }
+
+    // Create texture data
+    // Hardcoded based on texture atlas
+    let tx = vec!(0.0, 1.0);
+    let mut ty = vec!(1.0, 253.0 / 276.0);
+    ty.reverse();
+    let sx = vec!(0.0, 1.0);
+    let mut sy = vec!(0.0, 1.0);
+    sy.reverse();
+    let mut frame_vertices = Vec::with_capacity(tx.len() * ty.len());
+    for (ty, sy) in ty.iter().zip(sy.iter()) {
+        for (tx, sx) in tx.iter().zip(sx.iter()) {
+            frame_vertices.push(texture::Vertex { position: [*sx, *sy, 0.0], tex_coords: [*tx, *ty] });
+        }
+    }
+    let vertices = [
+        texture::Vertex { position: [0.0, 0.0, 0.0], tex_coords: [0.0, 1.0 / 12.0], },
+        texture::Vertex { position: [0.0, 1.0, 0.0], tex_coords: [0.0, 0.0 ], },
+        texture::Vertex { position: [1.0, 0.0, 0.0], tex_coords: [1.0, 1.0 / 12.0], },
+        texture::Vertex { position: [1.0, 1.0, 0.0], tex_coords: [1.0, 0.0 ], },
+    ];
+
+    let name = "Numbers".parse().unwrap();
+
+    build_texture(device, queue, bind_group_layout, name, image_data, &indices, instances, &vertices)
+}
+
+/// Creates a [texture::Object].
 fn build_texture(device: &wgpu::Device, queue: &wgpu::Queue,
                      bind_group_layout: &wgpu::BindGroupLayout, name: String, image_data: &[u8],
                      indices: &[u16], instances: Vec<texture::Instance>, vertices: &[texture::Vertex]) -> texture::Object {

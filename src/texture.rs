@@ -1,7 +1,51 @@
+use std::vec::IntoIter;
 use image::GenericImageView;
 use anyhow::*;
 use wgpu::util::DeviceExt;
-use crate::minesweeper::CellImage;
+use crate::{load_textures, minesweeper, seven_segment};
+
+/// Represents all the texture [Object]s in the game.
+pub struct Objects {
+    pub grid: Object,
+    pub border: Object,
+    pub display: Object,
+    display_values: (i32, i32),
+}
+
+impl Objects {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout,
+               width: minesweeper::Dim, height: minesweeper::Dim, mines: minesweeper::Count) -> Self {
+        Objects {
+            grid: load_textures::get_grid_texture(device, queue, layout, width, height),
+            border: load_textures::get_border_texture(device, queue, layout, width, height),
+            display: load_textures::get_number_texture(device, queue, layout, width, height, mines),
+            display_values: (mines as i32, 0),
+        }
+    }
+
+    /// Returns an iterator of the texture [Object]s in the order they need to be displayed.
+    pub fn get_objects(&self) -> IntoIter<&Object> {
+        vec!(&self.grid, &self.display, &self.border).into_iter()
+    }
+
+    /// Updates the given [seven_segment::Display] with the given value.
+    pub fn update_display(&mut self, display: seven_segment::Display, new_val: i32, queue: &wgpu::Queue) {
+        let is_timer = match display {
+            seven_segment::Display::MinesUnflagged => false,
+            seven_segment::Display::Timer => true
+        };
+        let old_val =  if is_timer{ self.display_values.1 } else { self.display_values.0 };
+        if is_timer { self.display_values.1 = new_val } else { self.display_values.0 = new_val };
+        let updated_digits = seven_segment::get_updated_texture_coords(new_val, old_val);
+        let offset = if is_timer { 3 } else { 0 };
+        for idx in 0..3 {
+            if let Some(tex_coords) = updated_digits[idx] {
+                self.display.instances[idx + offset].tex_cord_translation = tex_coords;
+            }
+        }
+        self.display.update_no_expand(queue);
+    }
+}
 
 /// A vertex from a mesh.
 /// Uses #[repr(C)] for wgsl shader compatability.
@@ -14,10 +58,10 @@ pub struct Vertex {
 
 impl Vertex {
     /// Attributes for buffer layout.
-    /// Needs to be stored as a constant as vertex_attr_array! returns a temporary value
+    /// Needs to be stored as a constant as vertex_attr_array! returns a temporary value.
     const ATTRIBS: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
 
-    /// Returns a buffer layout for [`Vertex`].
+    /// Returns a buffer layout for [Vertex].
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: size_of::<Vertex>() as wgpu::BufferAddress,
@@ -27,7 +71,7 @@ impl Vertex {
     }
 }
 
-/// An instance of an object.
+/// An instance of a texture object.
 #[derive(Debug)]
 pub struct Instance {
     pub vertex_translation: [f32; 2],
@@ -36,7 +80,7 @@ pub struct Instance {
 }
 
 impl Instance {
-    /// Convert an [`Instance`] to an [`InstanceRaw`] to be loaded into a buffer.
+    /// Convert an [Instance] to an [InstanceRaw] to be loaded into a buffer.
     pub fn to_raw(&self) -> InstanceRaw {
         let x_scale = self.vertex_scale[0];
         let y_scale = self.vertex_scale[1];
@@ -65,7 +109,7 @@ pub struct InstanceRaw {
 }
 
 impl InstanceRaw {
-    /// Returns a buffer layout for [`InstanceRaw`].
+    /// Returns a buffer layout for [InstanceRaw].
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: size_of::<InstanceRaw>() as wgpu::BufferAddress,
@@ -109,6 +153,7 @@ pub struct Texture {
     pub sampler: wgpu::Sampler,
 }
 
+/// A texture object.
 pub struct Object {
     #[allow(unused)]
     pub name: String,
@@ -140,6 +185,15 @@ impl Object {
         }
     }
 
+    /// Updates the instance buffer to reflect the current state of instances.
+    /// Panics if instances is too big.
+    pub fn update_no_expand(&mut self, queue: &wgpu::Queue) {
+        assert!(self.instance_buffer.size() as usize >= self.instances.len() * size_of::<[f32; 16]>(), "instances too big");
+        let instance_data = self.instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        let new_buffer_data = bytemuck::cast_slice(&instance_data);
+        queue.write_buffer(&self.instance_buffer, 0, &new_buffer_data);
+    }
+
     /// Updates the instance buffer at the given index using instances.
     pub fn update_instance(&mut self, queue: &wgpu::Queue, index: usize) {
         let instance_data = [self.instances[index].to_raw()];
@@ -149,8 +203,10 @@ impl Object {
 }
 
 impl Texture {
+    /// The format of the information in the depth texture.
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+    /// Creates a new depth texture.
     pub fn create_depth_texture(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, label: &str) -> Self {
         let size = wgpu::Extent3d {
             width: config.width.max(1),
@@ -265,23 +321,24 @@ impl Texture {
     }
 }
 
-/// Returns the texture coordinates for the given [`CellImage`]. This is based on the texture atlas in `Grid.png`.
-pub fn get_tex_coords(image: &CellImage) -> [f32; 2] {
+/// Returns the texture coordinates for the given [CellImage]. This is based on the texture atlas in Grid.png.
+pub fn get_cell_tex_coords(image: &minesweeper::CellImage) -> [f32; 2] {
+    use minesweeper::CellImage::*;
     match image {
-        CellImage::Zero => [0.0, 0.5],
-        CellImage::One => [0.0, 0.0],
-        CellImage::Two => [0.25, 0.0],
-        CellImage::Three => [0.5, 0.0],
-        CellImage::Four => [0.75, 0.0],
-        CellImage::Five => [0.0, 0.25],
-        CellImage::Six => [0.25, 0.25],
-        CellImage::Seven => [0.5, 0.25],
-        CellImage::Eight => [0.75, 0.25],
-        CellImage::Mine => [0.5, 0.75],
-        CellImage::WronglyFlagged => [0.75, 0.5],
-        CellImage::SelectedMine => [0.75, 0.75],
-        CellImage::Hidden => [0.25, 0.5],
-        CellImage::Flagged => [0.5, 0.5],
-        CellImage::QuestionMarked => [0.25, 0.75],
+        Zero           => [0.0,  0.5],
+        One            => [0.0,  0.0],
+        Two            => [0.25, 0.0],
+        Three          => [0.5,  0.0],
+        Four           => [0.75, 0.0],
+        Five           => [0.0,  0.25],
+        Six            => [0.25, 0.25],
+        Seven          => [0.5,  0.25],
+        Eight          => [0.75, 0.25],
+        Mine           => [0.5,  0.75],
+        WronglyFlagged => [0.75, 0.5],
+        SelectedMine   => [0.75, 0.75],
+        Hidden         => [0.25, 0.5],
+        Flagged        => [0.5,  0.5],
+        QuestionMarked => [0.25, 0.75],
     }
 }

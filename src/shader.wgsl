@@ -1,21 +1,3 @@
-/*
-@group(0) @binding(0) var t_diffuse: texture_2d_array<f32>;
-
-struct VertexOutput {
-    @builtin(position) Position: vec4<f32>,
-    @location(0) Color: vec4<f32>,
-    @location(1) TexCoord : vec2<f32>,
-    @location(2) @interpolate(flat) Index : u32,
-}
-
-@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(t_diffuse, s_diffuse, in.TexCoord, in.Index);
-    return color;
-}
-*/
-
-
-
 // Vertex Shader
 
 struct CameraUniform {
@@ -57,6 +39,7 @@ fn vs_main(model: VertexInput, instance: InstanceInput) -> VertexOutput {
     return out;
 }
 
+// Fragment Shader
 
 @group(0) @binding(0)
 var t_diffuse: texture_2d<f32>;
