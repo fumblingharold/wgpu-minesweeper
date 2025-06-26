@@ -87,7 +87,7 @@ struct State<'a> {
     scaling_bind_group: wgpu::BindGroup,
     depth_texture: texture::Texture,
     minesweeper_grid: minesweeper::Game,
-    cursor_pos: cgmath::Vector2<f64>,
+    cursor_pos: cgmath::Vector2<f32>,
     seconds_since_game_start: u32,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
@@ -324,42 +324,36 @@ impl<'a> State<'a> {
         let flags = self.minesweeper_grid.flags;
         let game_state = self.minesweeper_grid.game_state.clone();
         let result = match event {
-            WindowEvent::KeyboardInput { event, .. } => {
-                match event.physical_key {
-                    PhysicalKey::Code(KeyCode::KeyR) if event.state.is_pressed() => {
-                        self.minesweeper_grid.reset();
-                        for (instance, image) in self.objects.grid.instances.iter_mut().zip(self.minesweeper_grid.get_all_images().iter().flatten()) {
-                            instance.tex_cord_translation = texture::get_cell_tex_coords(&image);
-                        }
-                        self.objects.grid.update(&self.device, &self.queue);
-                        self.window.request_redraw();
-                        true
-                    },
-                    _ => false,
+            WindowEvent::KeyboardInput { event: KeyEvent { physical_key: PhysicalKey::Code(KeyCode::KeyR), state: ElementState::Pressed, .. }, .. } => {
+                self.minesweeper_grid.reset();
+                for (instance, image) in self.objects.grid.instances.iter_mut().zip(self.minesweeper_grid.get_all_images().iter().flatten()) {
+                    instance.tex_cord_translation = texture::get_cell_tex_coords(&image);
                 }
+                self.objects.grid.update(&self.device, &self.queue);
+                self.window.request_redraw();
+                true
             },
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_pos.x =
-                    (position.x / self.size.width as f64 + self.scaling.scaling.x as f64 / 2.0 - 0.5)
-                        / self.scaling.scaling.x as f64;
+                    (position.x as f32 / self.size.width as f32 + self.scaling.scaling.x / 2.0 - 0.5)
+                        / self.scaling.scaling.x * 2.0 - 1.0;
                 self.cursor_pos.y =
-                    (position.y / self.size.height as f64 + self.scaling.scaling.y as f64 / 2.0 - 0.5)
-                        / self.scaling.scaling.y as f64;
+                    (position.y as f32 / self.size.height as f32 + self.scaling.scaling.y / 2.0 - 0.5)
+                        / self.scaling.scaling.y * -2.0 + 1.0;
                 true
             },
-            WindowEvent::MouseInput { state: mouse_state, button, .. }
-            if mouse_state.is_pressed() => {
-                self.cursor_pos = load_textures::convert_to_over_grid(self.minesweeper_grid.width, self.minesweeper_grid.height, self.cursor_pos);
-                if self.cursor_pos.x >= 0.0 && self.cursor_pos.x < 1.0
-                    && self.cursor_pos.y >= 0.0 && self.cursor_pos.y < 1.0 {
-                    let row = ((1.0 - self.cursor_pos.y) * self.minesweeper_grid.height as f64) as u8;
-                    let col = (self.cursor_pos.x * self.minesweeper_grid.width as f64) as u8;
+            WindowEvent::MouseInput { state: ElementState::Pressed, button, .. } => {
+                let grid_pos =
+                    load_textures::convert_to_over_grid(self.minesweeper_grid.width,
+                                                        self.minesweeper_grid.height,
+                                                        self.cursor_pos);
+                if let Some(pos) = grid_pos {
                     let grid_object = &mut self.objects.grid;
                     let result =
                         if button == &MouseButton::Left {
-                            self.minesweeper_grid.left_click((row, col))
+                            self.minesweeper_grid.left_click(pos)
                         } else if button == &MouseButton::Right {
-                            self.minesweeper_grid.right_click((row, col))
+                            self.minesweeper_grid.right_click(pos)
                         } else {
                             Vec::new()
                         };
@@ -369,10 +363,8 @@ impl<'a> State<'a> {
                         grid_object.update_instance(&self.queue, index);
                     });
                     self.window.request_redraw();
-                    true
-                } else {
-                    false
                 }
+                true
             },
             _ => false,
         };
