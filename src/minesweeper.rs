@@ -1,6 +1,11 @@
-use std::cmp::PartialEq;
-use std::ops::{Index, IndexMut};
 use rand::Rng;
+use std::{
+    cmp::PartialEq,
+    ops::{
+        Index,
+        IndexMut,
+    },
+};
 
 pub type Row = u8;
 pub type Col = u8;
@@ -50,40 +55,44 @@ impl CellImage {
         }
     }
 
-    /// Whether the given CellImage is a shown texture. Shown textures represent cells that have been revealed.
+    /// Whether the given CellImage is a shown texture. Shown textures represent cells that have
+    /// been revealed.
     fn shown(&self) -> bool {
         match self {
-            CellImage::Hidden         => false,
-            CellImage::Flagged        => false,
+            CellImage::Hidden => false,
+            CellImage::Flagged => false,
             CellImage::QuestionMarked => false,
-            _                         => true,
+            _ => true,
         }
     }
 }
 
-/// A cell in the minesweeper grid. Keeps track of the cells current texture and whether it is a mine.
+/// A cell in the minesweeper grid. Keeps track of the cells current texture and whether it is a
+/// mine.
 #[derive(Clone, Debug)]
 struct Cell {
     image: CellImage,
     mine: bool,
 }
 
-/// The state of a minesweeper game. Different states allow different interactions and have different guarantees.
-/// All states permit resetting at any time, which sets the state to [GameState::BeforeGame].
+/// The state of a minesweeper game. Different states allow different interactions and have
+/// different guarantees. All states permit resetting at any time, which sets the state to
+/// [GameState::BeforeGame].
 #[derive(Debug, PartialEq, Clone)]
 pub enum GameState {
     /// Allows only left-clicking on the game. Guarantees the clicked [Cell] will be safe.
     /// This interaction starts the game: generates the grid if needed, places the mines,
     /// and transitions the [GameState] to [GameState::DuringGame].
     BeforeGame,
-    /// Allows all interactions with the game. Ending the game transitions the [GameState] to [GameState::AfterGame].
+    /// Allows all interactions with the game. Ending the game transitions the [GameState] to
+    /// [GameState::AfterGame].
     DuringGame,
     /// Prevents all interactions with the game.
     AfterGame,
 }
 
-/// Represents the grid of [Cell]s. Stored as a 2D vector of [Cells] and indexed using [u8] because of
-/// obvious usability issues in minesweeper grid size >255x255.
+/// Represents the grid of [Cell]s. Stored as a 2D vector of [Cells] and indexed using [u8] because
+/// of obvious usability issues in minesweeper grid size >255x255.
 #[derive(Debug)]
 struct GameGrid {
     data: Vec<Vec<Cell>>,
@@ -94,14 +103,21 @@ impl GameGrid {
     /// and texture [CellImage::Hidden].
     fn resize(&mut self, width: Dim, height: Dim) {
         if height != self.height() || width != self.width() {
-            let cell = Cell { image: CellImage::Hidden, mine: false };
+            let cell = Cell {
+                image: CellImage::Hidden,
+                mine: false,
+            };
             self.data = vec![vec![cell; width as usize]; height as usize];
         }
     }
 
     /// Gives the width of the grid.
     fn width(&self) -> Dim {
-        if self.height() == 0 { 0 } else { self.data[0].len() as u8 }
+        if self.height() == 0 {
+            0
+        } else {
+            self.data[0].len() as u8
+        }
     }
 
     /// Gives the height of the grid.
@@ -139,9 +155,13 @@ pub struct Game {
 }
 
 impl Game {
-    /// Creates a new game of minesweeper with the given dimensions and number of mines. Panics if the inputs are invalid.
+    /// Creates a new game of minesweeper with the given dimensions and number of mines. Panics if
+    /// the inputs are invalid.
     pub fn new(width: Dim, height: Dim, mines: Count) -> Self {
-        assert!(width as u16 * height as u16 > mines && width != 0 && height != 0 && mines != 0, "Invalid grid");
+        assert!(
+            width as u16 * height as u16 > mines && width != 0 && height != 0 && mines != 0,
+            "Invalid grid"
+        );
         Game {
             grid: GameGrid { data: Vec::new() },
             game_state: GameState::BeforeGame,
@@ -167,11 +187,16 @@ impl Game {
         self.game_state = GameState::BeforeGame;
     }
 
-    /// Performs the left click operations for minesweeper. Reveals the given [Cell] if it has the image
-    /// [CellImage::Hidden] or all the [Cell]s with image [CellImage::Hidden] around the given [Cell]
-    /// if it is shown. Does not perform any actions if the [GameState] is [GameState::AfterGame].
+    /// Performs the left click operations for minesweeper. Reveals the given [Cell] if it has the
+    /// image [CellImage::Hidden] or all the [Cell]s with image [CellImage::Hidden] around the
+    /// given [Cell] if it is shown. Does not perform any actions if the [GameState] is
+    /// [GameState::AfterGame].
     pub fn left_click(&mut self, pos: Pos) -> Vec<(Pos, CellImage)> {
-        assert!(pos.0 < self.height && pos.1 < self.width, "left_click invalid location: {:?}", pos);
+        assert!(
+            pos.0 < self.height && pos.1 < self.width,
+            "left_click invalid location: {:?}",
+            pos
+        );
         let mut result = Vec::new();
         if self.game_state == GameState::BeforeGame {
             self.start_game(pos);
@@ -179,7 +204,7 @@ impl Game {
         let cell = &mut self.grid[pos];
         if self.game_state == GameState::DuringGame {
             if cell.image == CellImage::Hidden {
-                result = self.show(vec!(pos));
+                result = self.show(vec![pos]);
             } else if !cell.image.shown() {
                 result.push(self.toggle_tofrom_question_marked(pos));
             } else {
@@ -196,14 +221,18 @@ impl Game {
     /// hidden from [CellImage::Hidden] to [CellImage::Flagged] and other hidden values to
     /// [CellImage::Hidden].
     pub fn right_click(&mut self, pos: Pos) -> Vec<(Pos, CellImage)> {
-        assert!(pos.0 < self.height && pos.1 < self.width, "toggle_flag invalid location");
+        assert!(
+            pos.0 < self.height && pos.1 < self.width,
+            "toggle_flag invalid location"
+        );
         // Does nothing if the cell is shown, otherwise toggle the flag
         if self.game_state == GameState::BeforeGame
             || self.game_state == GameState::AfterGame
-            || self.grid[pos].image.shown() {
+            || self.grid[pos].image.shown()
+        {
             Vec::new()
         } else {
-            vec!(self.toggle_tofrom_hidden(pos))
+            vec![self.toggle_tofrom_hidden(pos)]
         }
     }
 
@@ -211,13 +240,14 @@ impl Game {
     /// [CellImage] for every [Cell] texture updated. Performs 0 propagation.
     fn show(&mut self, mut cells: Vec<Pos>) -> Vec<(Pos, CellImage)> {
         // If any of the cells are mines, end the game
-        for pos in cells.iter_mut() { // Check if each cell is a mine
+        for pos in cells.iter_mut() {
+            // Check if each cell is a mine
             let cell = &mut self.grid[*pos];
             // If the cell is a mine that would be shown, end the game
             if cell.mine {
                 self.game_state = GameState::AfterGame;
                 cell.image = CellImage::SelectedMine;
-                let mut result = vec!(((pos.0, pos.1), CellImage::SelectedMine));
+                let mut result = vec![((pos.0, pos.1), CellImage::SelectedMine)];
                 for row in 0..self.height {
                     for col in 0..self.width {
                         let cell = &mut self.grid[(row, col)];
@@ -229,12 +259,12 @@ impl Game {
                             result.push(((row, col), cell.image.clone()));
                         }
                     }
-                };
-                return result
+                }
+                return result;
             }
         }
         // If it isn't a mine, add it to the list of cells to reveal
-        let mut result = vec!();
+        let mut result = vec![];
         // Reveal cells in stack until empty
         while !cells.is_empty() {
             let pos = cells.pop().unwrap();
@@ -270,21 +300,25 @@ impl Game {
     /// Toggles the given [Cell] to the given [CellImage] if it is anything else and to
     /// [CellImage::Flagged] if it is the given [CellImage].
     fn toggle_tofrom_given(&mut self, pos: Pos, given: CellImage) -> (Pos, CellImage) {
-        assert!(pos.1 < self.height && pos.0 < self.width, "invalid location");
+        assert!(
+            pos.1 < self.height && pos.0 < self.width,
+            "invalid location"
+        );
         //let mut cell = &mut self.grid[row as usize][col as usize];
-        let cell =  &mut self.grid[pos];
-        (pos,
-         if cell.image == given {
-             cell.image = CellImage::Flagged;
-             self.flags += 1;
-             CellImage::Flagged
-         } else {
-             if cell.image == CellImage::Flagged {
-                 self.flags -= 1;
-             }
-             cell.image = given.clone();
-             given
-         }
+        let cell = &mut self.grid[pos];
+        (
+            pos,
+            if cell.image == given {
+                cell.image = CellImage::Flagged;
+                self.flags += 1;
+                CellImage::Flagged
+            } else {
+                if cell.image == CellImage::Flagged {
+                    self.flags -= 1;
+                }
+                cell.image = given.clone();
+                given
+            },
         )
     }
 
@@ -342,11 +376,13 @@ impl Game {
         self.grid.resize(width, height);
         // Finds all cells that should not be mines
         let mut safe_cells = self.get_3x3((row, col));
-        safe_cells.iter().for_each(|pos| self.grid[*pos].image = CellImage::Hidden);
+        safe_cells
+            .iter()
+            .for_each(|pos| self.grid[*pos].image = CellImage::Hidden);
         // Remove cells from safe array if needed to get desired number of mines
         let mut cells_remaining = self.hidden - safe_cells.len() as u16;
         let mut mines_remaining = self.total_mines;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let (first_special_row, first_special_col) = safe_cells[0];
         let (last_special_row, last_special_col) = *safe_cells.iter().max().unwrap();
         let (next_normal_row, next_normal_col) = (last_special_row + 1, last_special_col + 1);
@@ -354,23 +390,24 @@ impl Game {
             let cells_to_make_unsafe = mines_remaining - cells_remaining;
             mines_remaining = cells_remaining;
             for _ in 0..cells_to_make_unsafe {
-                let index = rng.gen_range(0..(safe_cells.len() - 1));
-                let index_to_be_mine =
-                    if safe_cells[index] == (row, col) {
-                        safe_cells.len() - 1
-                    } else {
-                        index
-                    };
+                let index = rng.random_range(0..(safe_cells.len() - 1));
+                let index_to_be_mine = if safe_cells[index] == (row, col) {
+                    safe_cells.len() - 1
+                } else {
+                    index
+                };
                 self.grid[safe_cells.swap_remove(index_to_be_mine)].mine = true;
             }
         }
-        safe_cells.iter().for_each(|pos| self.grid[*pos].mine = false);
+        safe_cells
+            .iter()
+            .for_each(|pos| self.grid[*pos].mine = false);
         // Place mines in grid and reset all cells to be hidden
-        let mut fill_with_mines = move | row_range, col_range: core::ops::Range<u8> | {
+        let mut fill_with_mines = move |row_range, col_range: core::ops::Range<u8>| {
             for row in row_range {
                 for col in col_range.clone() {
                     let cell = &mut self.grid[(row, col)];
-                    let is_mine = rng.gen_range(0..cells_remaining) < mines_remaining;
+                    let is_mine = rng.random_range(0..cells_remaining) < mines_remaining;
                     cell.image = CellImage::Hidden;
                     cell.mine = is_mine;
                     cells_remaining -= 1;
