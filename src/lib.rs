@@ -2,17 +2,22 @@ mod main_window_graphics;
 mod minesweeper;
 mod window;
 
+use pollster::FutureExt;
+use std::sync::Arc;
 use winit::{
+    application::ApplicationHandler,
     event::*,
-    event_loop::{
-        ActiveEventLoop,
-        EventLoop,
-    },
+    event_loop,
+    event_loop::ActiveEventLoop,
     keyboard::{
         KeyCode,
         PhysicalKey,
     },
-    window::Window,
+    window::{
+        Window,
+        WindowAttributes,
+        WindowId,
+    },
 };
 
 const DEFAULT_WIDTH: minesweeper::Dim = 10;
@@ -33,13 +38,13 @@ struct State<'a> {
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
-    window: &'a Window,
+    window: Arc<Window>,
 }
 
 impl<'a> State<'a> {
     /// Creates a new State.
     /// It is async as creating some of the wgpu types requires async code.
-    async fn new(window: &'a Window) -> Self {
+    async fn new(window: Arc<Window>) -> Self {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
@@ -53,7 +58,7 @@ impl<'a> State<'a> {
         });
 
         // Handle for the window
-        let surface = instance.create_surface(window).unwrap();
+        let surface = instance.create_surface(window.clone()).unwrap();
 
         // Adapter for instance
         let adapter = instance
@@ -143,7 +148,7 @@ impl<'a> State<'a> {
     }
 
     /// Handles user inputs to the window.
-    fn input(&mut self, event: &WindowEvent, event_loop: &ActiveEventLoop) -> bool {
+    fn input(&mut self, event: &WindowEvent, event_loop: &event_loop::ActiveEventLoop) -> bool {
         let flags = self.minesweeper_grid.flags;
         let game_state = self.minesweeper_grid.game_state.clone();
         let result = match event {
@@ -280,75 +285,101 @@ impl<'a> State<'a> {
     }
 }
 
-/// Sets up the window and state and runs the event loop.
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
-pub async fn run() {
-    env_logger::init();
-    let event_loop = EventLoop::new().unwrap();
-    let window = event_loop
-        .create_window(Window::default_attributes())
-        .unwrap();
+struct MinesweeperHandler<'a> {
+    state: Option<State<'a>>,
+    window: Option<Arc<Window>>,
+}
 
-    let mut state = State::new(&window).await;
-
-    event_loop
-        .run(move |event, control_flow| match event {
-            Event::NewEvents(StartCause::Init) => {
-                state.window.set_title("Minesweeper");
-            }
-            Event::NewEvents(StartCause::ResumeTimeReached {
+impl<'a> ApplicationHandler for MinesweeperHandler<'a> {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        match cause {
+            StartCause::Init => (),
+            StartCause::ResumeTimeReached {
                 start: _,
                 requested_resume,
-            }) => {
-                control_flow.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+            } => {
+                event_loop.set_control_flow(event_loop::ControlFlow::WaitUntil(
                     requested_resume + std::time::Duration::from_secs_f32(1.0),
                 ));
+                let state = self.state.as_mut().unwrap();
                 state.main_window_graphics.update_display(
                     main_window_graphics::Display::Timer,
                     state.game_start_time.elapsed().as_secs() as i32,
                 );
-                state.window.request_redraw();
+                self.state.as_mut().unwrap().window.request_redraw();
             }
-            Event::WindowEvent {
-                ref event,
-                window_id,
-            } if window_id == state.window.id() => {
-                if !state.input(event, &control_flow) {
-                    match event {
-                        WindowEvent::RedrawRequested => match state.render() {
-                            Ok(_) => {}
-                            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                                state.resize(state.size)
-                            }
-                            Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
-                            Err(wgpu::SurfaceError::OutOfMemory) => {
-                                log::error!("Out of memory");
-                                control_flow.exit();
-                            }
-                            Err(wgpu::SurfaceError::Other) => {
-                                log::error!("Other error (God knows)");
-                                control_flow.exit();
-                            }
-                        },
-                        WindowEvent::Resized(physical_size) => {
-                            state.resize(*physical_size);
-                            state.window.request_redraw();
+            StartCause::WaitCancelled { .. } => (),
+            StartCause::Poll => panic!(),
+        }
+    }
+
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.state.is_none() {
+            self.window = Some(Arc::new(
+                event_loop
+                    .create_window(WindowAttributes::default())
+                    .unwrap(),
+            ));
+            self.window.as_ref().unwrap().set_title("Minesweeper");
+            self.state = Some(State::new(self.window.as_ref().unwrap().clone()).block_on());
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        if window_id == self.window.as_ref().unwrap().id() {
+            if !self.state.as_mut().unwrap().input(&event, event_loop) {
+                match event {
+                    WindowEvent::RedrawRequested => match self.state.as_mut().unwrap().render() {
+                        Ok(_) => {}
+                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                            let size = self.state.as_mut().unwrap().size;
+                            self.state.as_mut().unwrap().resize(size);
                         }
-                        WindowEvent::CloseRequested
-                        | WindowEvent::KeyboardInput {
-                            event:
-                                KeyEvent {
-                                    state: ElementState::Pressed,
-                                    physical_key: PhysicalKey::Code(KeyCode::Escape),
-                                    ..
-                                },
-                            ..
-                        } => control_flow.exit(),
-                        _ => {}
+                        Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
+                        Err(wgpu::SurfaceError::OutOfMemory) => {
+                            log::error!("Out of memory");
+                            event_loop.exit();
+                        }
+                        Err(wgpu::SurfaceError::Other) => {
+                            log::error!("Other error (God knows)");
+                            event_loop.exit();
+                        }
+                    },
+                    WindowEvent::Resized(physical_size) => {
+                        self.state.as_mut().unwrap().resize(physical_size);
+                        self.state.as_ref().unwrap().window.request_redraw();
                     }
+                    WindowEvent::CloseRequested
+                    | WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                state: ElementState::Pressed,
+                                physical_key: PhysicalKey::Code(KeyCode::Escape),
+                                ..
+                            },
+                        ..
+                    } => event_loop.exit(),
+                    _ => {}
                 }
             }
-            _ => {}
+        }
+    }
+}
+
+/// Sets up the window and state and runs the event loop.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
+pub async fn run() {
+    env_logger::init();
+    let event_loop = event_loop::EventLoop::new().unwrap();
+    event_loop
+        .run_app(&mut MinesweeperHandler {
+            state: None,
+            window: None,
         })
-        .expect("TODO: panic message");
+        .expect("Event loop crashed!");
 }
