@@ -63,9 +63,7 @@ impl MainWindowGraphics {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         texture_format: wgpu::TextureFormat,
-        width: minesweeper::Dim,
-        height: minesweeper::Dim,
-        mines: minesweeper::Count,
+        minesweeper_game: &minesweeper::Game,
     ) -> Self {
         let texture_layout = make_texture_layout(device);
         let (scaling, scaling_buffer, scaling_layout, scaling_bind_group) =
@@ -95,14 +93,14 @@ impl MainWindowGraphics {
         let mut result = Self {
             texture_renderer,
             rectangles: texture::TextureInstances::new(Vec::new()),
-            grid_width: width,
-            grid_height: height,
+            grid_width: minesweeper_game.width,
+            grid_height: minesweeper_game.height,
             scaling,
             scaling_buffer,
             scaling_bind_group,
             render_pipeline,
         };
-        let rectangles = get_main_window_instances(&result, mines);
+        let rectangles = get_main_window_instances(&result, minesweeper_game);
         result.rectangles.set_instances(rectangles);
         result
     }
@@ -303,7 +301,7 @@ pub fn convert_to_over_grid(
 /// Creates the initial [texture::Instance]s.
 fn get_main_window_instances(
     main_window_graphics: &MainWindowGraphics,
-    mines: minesweeper::Count,
+    minesweeper_game: &minesweeper::Game,
 ) -> Vec<texture::Instance> {
     let grid_width = main_window_graphics.grid_width;
     let grid_height = main_window_graphics.grid_height;
@@ -370,7 +368,10 @@ fn get_main_window_instances(
     }
 
     // Create instance data for displays
-    let mines_left_digits = seven_segment::get_texture_coords(mines as i32).into_iter();
+    let mines_left_digits = seven_segment::get_texture_coords(
+        (minesweeper_game.total_mines - minesweeper_game.flags) as i32,
+    )
+    .into_iter();
     let timer_digits = seven_segment::get_texture_coords(0).into_iter();
     let mut digits = mines_left_digits.chain(timer_digits);
     let vertex_scale = [DIGIT_WIDTH, DIGIT_HEIGHT];
@@ -396,23 +397,26 @@ fn get_main_window_instances(
     }
 
     // Create instance data for grid
-    let tex_coord_translation = get_cell_tex_coords_new(&minesweeper::CellImage::Hidden);
+    let tex_coords = minesweeper_game.get_all_images();
     instances.append(
         &mut (0..grid_height as u16)
-            .flat_map(|row| {
-                (0..grid_width as u16).map(move |col| {
-                    main_window_graphics.instance_from_pixel_data(
-                        [
-                            KNOWN_FRAME_WIDTHS[0] + col * CELL_LENGTH,
-                            KNOWN_FRAME_HEIGHTS[0] + row * CELL_LENGTH,
-                        ],
-                        [CELL_LENGTH, CELL_LENGTH],
-                        tex_coord_translation,
-                        [CELL_LENGTH, CELL_LENGTH],
-                        0,
-                        0,
-                    )
-                })
+            .zip(tex_coords.into_iter())
+            .flat_map(|(row_idx, row_images)| {
+                (0..grid_width as u16)
+                    .zip(row_images.into_iter())
+                    .map(move |(col_idx, image)| {
+                        main_window_graphics.instance_from_pixel_data(
+                            [
+                                KNOWN_FRAME_WIDTHS[0] + col_idx * CELL_LENGTH,
+                                KNOWN_FRAME_HEIGHTS[0] + row_idx * CELL_LENGTH,
+                            ],
+                            [CELL_LENGTH, CELL_LENGTH],
+                            get_cell_tex_coords_new(&image),
+                            [CELL_LENGTH, CELL_LENGTH],
+                            0,
+                            0,
+                        )
+                    })
             })
             .collect::<Vec<_>>(),
     );
