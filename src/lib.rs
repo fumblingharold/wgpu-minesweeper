@@ -190,6 +190,17 @@ impl<'a> State<'a> {
                     self.main_window_graphics.update_grid(result);
                     self.window.request_redraw();
                 }
+                if main_window_graphics::is_face_pressed(
+                    self.minesweeper_game.width,
+                    self.minesweeper_game.height,
+                    self.cursor_pos,
+                ) {
+                    if button == &MouseButton::Left {
+                        self.minesweeper_game.reset();
+                        self.main_window_graphics.reset_grid();
+                        self.window.request_redraw();
+                    }
+                }
                 true
             }
             _ => false,

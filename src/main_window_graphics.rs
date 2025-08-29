@@ -20,6 +20,8 @@ pub const DISPLAY_OFFSET_Y: u16 = (KNOWN_FRAME_HEIGHTS[2] - DIGIT_HEIGHT) / 2;
 pub const DISPLAY_OFFSET_X: u16 = DISPLAY_OFFSET_Y - 1;
 const DISPLAY_WIDTH: u16 = DIGIT_WIDTH * DIGITS_PER_DISPLAY as u16;
 const CELL_LENGTH: u16 = 16;
+const FACE_LENGTH: u16 = 24;
+const FACE_OFFSET_Y: u16 = (KNOWN_FRAME_HEIGHTS[2] - FACE_LENGTH) / 2 + 1;
 
 /// Vertex indices for a square with the above vertices.
 const SQUARE_INDICES: &[u16] = &[0, 2, 1, 1, 2, 3];
@@ -144,13 +146,10 @@ impl MainWindowGraphics {
     /// Resets all cells in the grid to be hidden.
     pub fn reset_grid(&mut self) {
         let num_cells = self.grid_width as usize * self.grid_height as usize;
-        let grid_start_index = 6 + 15;
+        let grid_start_index = 6 + 15 + 1;
         let grid_end_index = grid_start_index + num_cells;
-        let tex_coord_translation = self.get_tex_trans(
-            get_cell_tex_coords_new(&minesweeper::CellImage::Hidden),
-            0,
-            0,
-        );
+        let tex_coord_translation =
+            self.get_tex_trans(get_cell_tex_coords(&minesweeper::CellImage::Hidden), 0, 0);
         (grid_start_index..grid_end_index).for_each(|idx| {
             self.rectangles
                 .update_tex_coord_instance(idx, tex_coord_translation)
@@ -160,9 +159,8 @@ impl MainWindowGraphics {
     /// Updates all cells as described.
     pub fn update_grid(&mut self, updates: Vec<(minesweeper::Pos, minesweeper::CellImage)>) {
         updates.iter().for_each(|((row, col), cell_image)| {
-            let index = 6 + 15 + (*col as usize + *row as usize * self.grid_width as usize);
-            let tex_coord_translation =
-                self.get_tex_trans(get_cell_tex_coords_new(cell_image), 0, 0);
+            let index = 6 + 15 + 1 + (*col as usize + *row as usize * self.grid_width as usize);
+            let tex_coord_translation = self.get_tex_trans(get_cell_tex_coords(cell_image), 0, 0);
             self.rectangles
                 .update_tex_coord_instance(index, tex_coord_translation);
         });
@@ -298,6 +296,26 @@ pub fn convert_to_over_grid(
     }
 }
 
+pub fn is_face_pressed(
+    width: minesweeper::Dim,
+    height: minesweeper::Dim,
+    pos: cgmath::Vector2<f32>,
+) -> bool {
+    let left_bound = KNOWN_FRAME_WIDTHS[0] + width as u16 * CELL_LENGTH / 2 - FACE_LENGTH / 2;
+    let right_bound = left_bound + FACE_LENGTH;
+    let lower_bound = KNOWN_FRAME_HEIGHTS[0]
+        + CELL_LENGTH * height as u16
+        + KNOWN_FRAME_HEIGHTS[1]
+        + FACE_OFFSET_Y;
+    let upper_bound = lower_bound + FACE_LENGTH;
+    let pos_x = u16::from_f32((pos.x + 1.0) / 2.0 * get_total_pixel_width(width) as f32).unwrap();
+    let pos_y = u16::from_f32((pos.y + 1.0) / 2.0 * get_total_pixel_height(height) as f32).unwrap();
+    pos_x > left_bound
+        && pos_x < right_bound
+        && pos_y > lower_bound
+        && pos_y < upper_bound
+}
+
 /// Creates the initial [texture::Instance]s.
 fn get_main_window_instances(
     main_window_graphics: &MainWindowGraphics,
@@ -306,7 +324,7 @@ fn get_main_window_instances(
     let grid_width = main_window_graphics.grid_width;
     let grid_height = main_window_graphics.grid_height;
     let mut instances = Vec::with_capacity(
-        15 + DIGITS_PER_DISPLAY * 2 + (grid_width as usize * grid_height as usize),
+        15 + DIGITS_PER_DISPLAY * 2 + 1 + (grid_width as usize * grid_height as usize),
     );
 
     // Create instance data for the border
@@ -396,6 +414,22 @@ fn get_main_window_instances(
         }
     }
 
+    // Create instance for face
+    instances.push(main_window_graphics.instance_from_pixel_data(
+        [
+            KNOWN_FRAME_WIDTHS[0] + grid_width as u16 * CELL_LENGTH / 2 - FACE_LENGTH / 2,
+            KNOWN_FRAME_HEIGHTS[0]
+                + CELL_LENGTH * grid_height as u16
+                + KNOWN_FRAME_HEIGHTS[1]
+                + FACE_OFFSET_Y,
+        ],
+        [FACE_LENGTH, FACE_LENGTH],
+        get_face_tex_coords(&Face::Neutral),
+        [FACE_LENGTH, FACE_LENGTH],
+        16,
+        48,
+    ));
+
     // Create instance data for grid
     let tex_coords = minesweeper_game.get_all_images();
     instances.append(
@@ -411,7 +445,7 @@ fn get_main_window_instances(
                                 KNOWN_FRAME_HEIGHTS[0] + row_idx * CELL_LENGTH,
                             ],
                             [CELL_LENGTH, CELL_LENGTH],
-                            get_cell_tex_coords_new(&image),
+                            get_cell_tex_coords(&image),
                             [CELL_LENGTH, CELL_LENGTH],
                             0,
                             0,
@@ -424,9 +458,8 @@ fn get_main_window_instances(
     instances
 }
 
-/// Returns the texture coordinates for the given [CellImage]. This is based on the texture atlas in
-/// Grid.png.
-fn get_cell_tex_coords_new(image: &minesweeper::CellImage) -> [u16; 2] {
+/// Returns the texture coordinates for the given [CellImage]. This is based on the texture atlas.
+fn get_cell_tex_coords(image: &minesweeper::CellImage) -> [u16; 2] {
     use minesweeper::CellImage::*;
     match image {
         Zero => [0 * CELL_LENGTH, 0 * CELL_LENGTH],
@@ -444,6 +477,26 @@ fn get_cell_tex_coords_new(image: &minesweeper::CellImage) -> [u16; 2] {
         Hidden => [0, 3 * CELL_LENGTH],
         Flagged => [0, 4 * CELL_LENGTH],
         QuestionMarked => [0, 5 * CELL_LENGTH],
+    }
+}
+
+enum Face {
+    Neutral,
+    MouseDown,
+    Victory,
+    Loss,
+    Pressed,
+}
+
+/// Returns the texture coordinates for the given [Face]. This is based on the texture atlas.
+fn get_face_tex_coords(image: &Face) -> [u16; 2] {
+    use Face::*;
+    match image {
+        Neutral => [0 * FACE_LENGTH, 0 * FACE_LENGTH],
+        MouseDown => [1 * FACE_LENGTH, 0 * FACE_LENGTH],
+        Victory => [0 * FACE_LENGTH, 1 * FACE_LENGTH],
+        Loss => [1 * FACE_LENGTH, 1 * FACE_LENGTH],
+        Pressed => [2 * FACE_LENGTH, 1 * FACE_LENGTH],
     }
 }
 
