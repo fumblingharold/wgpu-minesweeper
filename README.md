@@ -24,3 +24,8 @@ them to future me to complete.
 - Right-click on face should open window to allow resizing the board and other settings
 - Best completion times should be stored in file
 - Rendering should be optimized since it is currently drawing the whole scene every time (yes, I know it doesn't matter)
+
+### Additional notes
+Yes, I know that some things are a pixel off or so. They felt like bugs in the original implementation and I wanted to
+resolve them, even if that means slightly changing the look. Then again, if you're the sort of person to care that much,
+just run the OG version in a VM.
