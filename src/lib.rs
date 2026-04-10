@@ -1,6 +1,5 @@
 mod main_window_graphics;
 mod minesweeper;
-mod window;
 
 use pollster::FutureExt;
 use std::sync::Arc;
@@ -31,8 +30,9 @@ struct State<'a> {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     main_window_graphics: main_window_graphics::MainWindowGraphics,
-    minesweeper_game: minesweeper::Game,
+    game: minesweeper::Game,
     cursor_pos: cgmath::Vector2<f32>,
+    left_mouse_down: bool,
     game_start_time: std::time::Instant,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
@@ -125,7 +125,8 @@ impl<'a> State<'a> {
             size,
             main_window_graphics,
             cursor_pos: cgmath::Vector2::new(0.0, 0.0),
-            minesweeper_game,
+            left_mouse_down: false,
+            game: minesweeper_game,
             game_start_time: std::time::Instant::now(),
         }
     }
@@ -141,111 +142,289 @@ impl<'a> State<'a> {
         }
     }
 
-    /// Handles user inputs to the window.
-    fn input(&mut self, event: &WindowEvent, event_loop: &event_loop::ActiveEventLoop) -> bool {
-        let flags = self.minesweeper_game.flags;
-        let game_state = self.minesweeper_game.game_state.clone();
-        let result = match event {
-            WindowEvent::KeyboardInput {
-                event:
-                    KeyEvent {
-                        physical_key: PhysicalKey::Code(KeyCode::KeyR),
-                        state: ElementState::Pressed,
-                        ..
-                    },
-                ..
-            } => {
-                self.minesweeper_game.reset();
-                self.main_window_graphics.reset_grid();
-                self.window.request_redraw();
-                true
+    /// Updates the [Display] in the main window based on self's internal data.
+    fn update_display(&mut self, display: main_window_graphics::Display) {
+        use main_window_graphics::Display;
+        let new_val = match display {
+            Display::Timer => self.game_start_time.elapsed().as_secs() as i32,
+            Display::MinesUnflagged => self.game.total_mines as i32 - self.game.flags as i32,
+        };
+        self.main_window_graphics.update_display(display, new_val);
+    }
+
+    /// Updates the face textures if needed based on the change in mouse position, left_mouse_down,
+    /// and game_state.
+    /// Returns whether an update was made.
+    fn update_face(
+        &mut self,
+        old_pos: cgmath::Vector2<f32>,
+        old_left_mouse_down: bool,
+        old_game_state: minesweeper::GameState,
+    ) -> bool {
+        let is_face_pressed = |pos, left_mouse_down| {
+            left_mouse_down
+                && main_window_graphics::is_over_face(self.game.width, self.game.height, pos)
+        };
+        let get_face = |pos, left_mouse_down, game_state| {
+            main_window_graphics::face_from_game_state(
+                is_face_pressed(pos, left_mouse_down),
+                left_mouse_down,
+                game_state,
+            )
+        };
+
+        let old_face = get_face(old_pos, old_left_mouse_down, &old_game_state);
+        let new_face = get_face(self.cursor_pos, self.left_mouse_down, &self.game.game_state);
+
+        if old_face == new_face {
+            return false;
+        }
+
+        self.main_window_graphics.update_face(new_face);
+        true
+    }
+
+    /// Updates the grid textures if needed based on the change in mouse position, left_mouse_down,
+    /// and game_state.
+    /// Returns whether an update was made.
+    /// Will "unpress" the old grid position and "press" the new position.
+    fn update_grid(
+        &mut self,
+        old_pos: cgmath::Vector2<f32>,
+        old_left_mouse_down: bool,
+        old_game_state: minesweeper::GameState,
+    ) -> bool {
+        // Gets an Optional grid position from a mouse position
+        // Is none if the mouse isn't over the grid or mouse isn't down
+        let get_grid_pos =
+            |cursor_pos, left_mouse_down: bool, game_state: minesweeper::GameState| {
+                if left_mouse_down && !game_state.is_after_game() {
+                    main_window_graphics::convert_to_over_grid(
+                        self.game.width,
+                        self.game.height,
+                        cursor_pos,
+                    )
+                } else {
+                    None
+                }
+            };
+
+        // Get grid positions old the new cursor positions
+        let old_grid_pos = get_grid_pos(old_pos, old_left_mouse_down, old_game_state);
+        let new_grid_pos =
+            get_grid_pos(self.cursor_pos, self.left_mouse_down, self.game.game_state);
+
+        // Update window if cursor has moved cells
+        if old_grid_pos != new_grid_pos {
+            // Updates the cell at the given position to the given image if it is hidden
+            // Returns whether an update was made
+            let mut update_grid_pos = |pos, image| {
+                if self.game.get_image_at(pos) == minesweeper::CellImage::Hidden {
+                    // Update grid if cell is hidden
+                    self.main_window_graphics.update_grid(&[(pos, image)]);
+                    true
+                } else {
+                    false
+                }
+            };
+
+            // Tries to hide the cell at the old position and "press" the cell at new position
+            // Using map since the positions are options (i.e. cursor might move from grid to off
+            // grid)
+            let updated_old_pos = old_grid_pos
+                .map(|pos| update_grid_pos(pos, self.game.get_image_at(pos)))
+                .unwrap_or(false);
+            let updated_new_pos = new_grid_pos
+                .map(|pos| update_grid_pos(pos, minesweeper::CellImage::Zero))
+                .unwrap_or(false);
+
+            // Return whether changes were made
+            updated_old_pos || updated_new_pos
+        } else {
+            false
+        }
+    }
+
+    /// Updates the grid and face textures if needed based on the change in mouse position,
+    /// left_mouse_down, and game_state.
+    /// Returns whether an update was made.
+    fn update_grid_and_face(
+        &mut self,
+        new_pos: cgmath::Vector2<f32>,
+        new_left_mouse_down: bool,
+        new_game_state: minesweeper::GameState,
+    ) -> bool {
+        let grid_updated = self.update_grid(new_pos, new_left_mouse_down, new_game_state);
+        let face_updated = self.update_face(new_pos, new_left_mouse_down, new_game_state);
+
+        grid_updated || face_updated
+    }
+
+    /// Updates the position of the cursor and updates the window if needed.
+    fn move_cursor(&mut self, new_pos: &winit::dpi::PhysicalPosition<f64>) {
+        // Calculate new position
+        let scaling_x = self.main_window_graphics.scaling_x();
+        let scaling_y = self.main_window_graphics.scaling_y();
+        let new_pos_x = (new_pos.x as f32 / self.size.width as f32 - 0.5) / scaling_x * 2.0;
+        let new_pos_y = (new_pos.y as f32 / self.size.height as f32 - 0.5) / scaling_y * -2.0;
+        let new_pos = cgmath::vec2(new_pos_x, new_pos_y);
+
+        // Update position in self but keep old position
+        let old_pos = self.cursor_pos;
+        self.cursor_pos = new_pos;
+
+        // Try update grid and face
+        let redraw_requested =
+            self.update_grid_and_face(old_pos, self.left_mouse_down, self.game.game_state);
+
+        // Request redraw if needed
+        if redraw_requested {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Sets left_mouse_down to true and updates the window if needed.
+    fn left_mouse_down(&mut self) {
+        self.left_mouse_down = true;
+        let redraw_requested =
+            self.update_grid_and_face(self.cursor_pos, false, self.game.game_state);
+        if redraw_requested {
+            self.window.request_redraw();
+        }
+    }
+
+    /// Sets left_mouse_down to false and updates the window if needed.
+    /// If the mouse was over the face, restarts the game.
+    /// If the mouse was over the grid, sends the click along to the game.
+    fn left_mouse_released(&mut self, event_loop: &event_loop::ActiveEventLoop) {
+        self.left_mouse_down = false;
+
+        // Store old game state for use in updating face
+        let old_game_state = self.game.game_state;
+
+        // Get position on grid and if face is pressed
+        let grid_pos = main_window_graphics::convert_to_over_grid(
+            self.game.width,
+            self.game.height,
+            self.cursor_pos,
+        );
+        let face_pressed =
+            main_window_graphics::is_over_face(self.game.width, self.game.height, self.cursor_pos);
+
+        if let Some(pos) = grid_pos { // Try clicking cell on grid
+            use minesweeper::{
+                CellImage,
+                GameState,
+            };
+
+            // Start game if before game
+            // Set start time to now and set control flow to send an event in 1 second to update the
+            // timer
+            if let GameState::BeforeGame = self.game.game_state {
+                self.game_start_time = std::time::Instant::now();
+                event_loop.set_control_flow(event_loop::ControlFlow::WaitUntil(
+                    self.game_start_time + std::time::Duration::from_secs_f32(1.0),
+                ));
             }
+
+            // Perform the click on the cell, get the list of cells to update, and update the grid
+            // using the updates.
+            let updates = self.game.left_click(pos);
+            self.main_window_graphics.update_grid(&updates);
+
+            // If the game is not running, stops event loop from resuming after the timer
+            // No longer need it to resume as the timer should have stopped running
+            if !matches!(self.game.game_state, GameState::DuringGame) {
+                event_loop.set_control_flow(event_loop::ControlFlow::Wait);
+            }
+
+            // If the update was just a change between flagged and question marked, update mines
+            // unflagged. It is an invariant that flagged <-> question marked will be the only
+            // update when they happen.
+            if updates.len() == 1 && let CellImage::Flagged | CellImage::QuestionMarked = updates[0].1 {
+                self.update_display(main_window_graphics::Display::MinesUnflagged);
+            }
+
+            // If the game was ended by this click, update the mines unflagged display and print the
+            // time.
+            if !updates.is_empty() && let GameState::Victory = self.game.game_state {
+                self.update_display(main_window_graphics::Display::MinesUnflagged);
+                let game_duration_ms = self.game_start_time.elapsed().as_millis();
+                let game_duration_seconds = game_duration_ms / 1000;
+                println!(
+                    "Game duration: {}.{} seconds",
+                    game_duration_seconds,
+                    game_duration_ms % 1000
+                );
+            }
+        } else if face_pressed { // Press face
+            // Reset "everything"
+            self.game.reset();
+            self.main_window_graphics.reset_grid();
+            self.game_start_time = std::time::Instant::now();
+            self.update_display(main_window_graphics::Display::Timer);
+            self.update_display(main_window_graphics::Display::MinesUnflagged);
+            event_loop.set_control_flow(event_loop::ControlFlow::Wait);
+        }
+
+        // Update face and grid and request redraw
+        // Redraw will always be needed to at least update face
+        self.update_grid_and_face(self.cursor_pos, true, old_game_state);
+        self.window.request_redraw();
+    }
+
+    /// If the mouse was over the grid, sends the click along to the game.
+    /// Updates the window if needed.
+    fn right_mouse_down(&mut self) {
+        let grid_pos = main_window_graphics::convert_to_over_grid(
+            self.game.width,
+            self.game.height,
+            self.cursor_pos,
+        );
+        if let Some(pos) = grid_pos {
+            let update = self.game.right_click(pos);
+            if let Some(update) = update {
+                self.main_window_graphics.update_grid(&[update]);
+                self.update_display(main_window_graphics::Display::MinesUnflagged);
+                self.window.request_redraw();
+            }
+        }
+    }
+
+    /// Handles user inputs to the window.
+    /// Returns whether the event matched any of its cases.
+    fn input(&mut self, event: &WindowEvent, event_loop: &event_loop::ActiveEventLoop) -> bool {
+        match event {
             WindowEvent::CursorMoved { position, .. } => {
-                let scaling_x = self.main_window_graphics.scaling_x();
-                let scaling_y = self.main_window_graphics.scaling_y();
-                self.cursor_pos.x =
-                    (position.x as f32 / self.size.width as f32 - 0.5) / scaling_x * 2.0;
-                self.cursor_pos.y =
-                    (position.y as f32 / self.size.height as f32 - 0.5) / scaling_y * -2.0;
+                self.move_cursor(position);
                 true
             }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
-                button,
+                button: MouseButton::Right,
                 ..
             } => {
-                let grid_pos = main_window_graphics::convert_to_over_grid(
-                    self.minesweeper_game.width,
-                    self.minesweeper_game.height,
-                    self.cursor_pos,
-                );
-                if let Some(pos) = grid_pos {
-                    let result = if button == &MouseButton::Left {
-                        self.minesweeper_game.left_click(pos)
-                    } else if button == &MouseButton::Right {
-                        self.minesweeper_game.right_click(pos)
-                    } else {
-                        Vec::new()
-                    };
-                    self.main_window_graphics.update_grid(result);
-                    self.window.request_redraw();
-                }
-                if main_window_graphics::is_face_pressed(
-                    self.minesweeper_game.width,
-                    self.minesweeper_game.height,
-                    self.cursor_pos,
-                ) {
-                    if button == &MouseButton::Left {
-                        self.minesweeper_game.reset();
-                        self.main_window_graphics.reset_grid();
-                        self.window.request_redraw();
-                    }
-                }
+                self.right_mouse_down();
+                true
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.left_mouse_down();
+                true
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.left_mouse_released(event_loop);
                 true
             }
             _ => false,
-        };
-        // If the grid changed, check if displays need to be updated
-        if result {
-            if flags != self.minesweeper_game.flags {
-                let val =
-                    self.minesweeper_game.total_mines as i32 - self.minesweeper_game.flags as i32;
-                self.main_window_graphics
-                    .update_display(main_window_graphics::Display::MinesUnflagged, val);
-            }
-            if game_state != self.minesweeper_game.game_state {
-                use minesweeper::GameState::*;
-                event_loop.set_control_flow(match self.minesweeper_game.game_state {
-                    BeforeGame => {
-                        self.main_window_graphics
-                            .update_display(main_window_graphics::Display::Timer, 0);
-                        self.main_window_graphics.update_display(
-                            main_window_graphics::Display::MinesUnflagged,
-                            self.minesweeper_game.total_mines as i32,
-                        );
-                        self.window.request_redraw();
-                        event_loop::ControlFlow::Wait
-                    }
-                    DuringGame => {
-                        self.game_start_time = std::time::Instant::now();
-                        event_loop::ControlFlow::WaitUntil(
-                            self.game_start_time + std::time::Duration::from_secs_f32(1.0),
-                        )
-                    }
-                    AfterGame => {
-                        let game_duration_ms = self.game_start_time.elapsed().as_millis();
-                        let game_duration_seconds = game_duration_ms / 1000;
-                        println!(
-                            "Game duration: {}.{} seconds",
-                            game_duration_seconds,
-                            game_duration_ms % 1000
-                        );
-                        event_loop::ControlFlow::Wait
-                    }
-                });
-            }
-        };
-        result
+        }
     }
 
     /// Render the game to the window.
@@ -311,10 +490,7 @@ impl<'a> ApplicationHandler for MinesweeperApp<'a> {
                 event_loop.set_control_flow(event_loop::ControlFlow::WaitUntil(
                     requested_resume + std::time::Duration::from_secs_f32(1.0),
                 ));
-                state.main_window_graphics.update_display(
-                    main_window_graphics::Display::Timer,
-                    state.game_start_time.elapsed().as_secs() as i32,
-                );
+                state.update_display(main_window_graphics::Display::Timer);
                 state.window.request_redraw();
             }
             StartCause::WaitCancelled { .. } => (),
@@ -334,13 +510,12 @@ impl<'a> ApplicationHandler for MinesweeperApp<'a> {
                         .unwrap(),
                 );
                 window.set_title("Minesweeper");
-                std::mem::swap(
-                    self,
-                    &mut MinesweeperApp::Running(State::new(window, game)),
-                );
+                std::mem::swap(self, &mut MinesweeperApp::Running(State::new(window, game)));
             }
         }
     }
+
+    fn user_event(&mut self, _event_loop: &event_loop::ActiveEventLoop, _event: ()) {}
 
     fn window_event(
         &mut self,
@@ -391,30 +566,30 @@ impl<'a> ApplicationHandler for MinesweeperApp<'a> {
         }
     }
 
+    fn device_event(
+        &mut self,
+        _event_loop: &event_loop::ActiveEventLoop,
+        _device_id: DeviceId,
+        _event: DeviceEvent,
+    ) {
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &event_loop::ActiveEventLoop) {}
+
     fn suspended(&mut self, event_loop: &event_loop::ActiveEventLoop) {
         let state = std::mem::replace(self, MinesweeperApp::Suspended(None));
         if let MinesweeperApp::Running(state) = state {
             if let MinesweeperApp::Suspended(game) = self {
-                std::mem::swap(game, &mut Some(state.minesweeper_game));
+                event_loop.set_control_flow(event_loop::ControlFlow::Wait);
+                std::mem::swap(game, &mut Some(state.game));
+                panic!("Not fully implemented: need to store game start time to be able to resume");
             }
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &event_loop::ActiveEventLoop) {}
+    fn exiting(&mut self, _event_loop: &event_loop::ActiveEventLoop) {}
 
-    fn device_event(
-        &mut self,
-        event_loop: &event_loop::ActiveEventLoop,
-        device_id: DeviceId,
-        event: DeviceEvent,
-    ) {
-    }
-
-    fn exiting(&mut self, event_loop: &event_loop::ActiveEventLoop) {}
-
-    fn memory_warning(&mut self, event_loop: &event_loop::ActiveEventLoop) {}
-
-    fn user_event(&mut self, event_loop: &event_loop::ActiveEventLoop, event: ()) {}
+    fn memory_warning(&mut self, _event_loop: &event_loop::ActiveEventLoop) {}
 }
 
 /// Sets up the window and state and runs the event loop.

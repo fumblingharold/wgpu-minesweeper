@@ -5,7 +5,7 @@ pub const DIGIT_HEIGHT: u16 = 23;
 pub(crate) const DIGITS_PER_DISPLAY: usize = 3;
 
 /// Represents the two different seven-segment displays.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum Display {
     MinesUnflagged,
     Timer,

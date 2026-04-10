@@ -182,7 +182,7 @@ impl TextureInstances {
     }
 
     /// Updates the texture coordinates of the instance at the given index.
-    pub fn update_tex_coord_instance(&mut self, index: usize, tex_coord_translation: [f32; 2]) {
+    pub fn update_tex_trans_instance(&mut self, index: usize, tex_coord_translation: [f32; 2]) {
         self.instances[index].tex_coord_translation = tex_coord_translation;
     }
 }

@@ -7,18 +7,13 @@ mod texture;
 
 use crate::minesweeper;
 pub use seven_segment::Display;
-use seven_segment::{
-    DIGITS_PER_DISPLAY,
-    DIGIT_HEIGHT,
-    DIGIT_WIDTH,
-};
 
 /// Hard coded information about the number of pixels in the textures.
 pub const KNOWN_FRAME_WIDTHS: [u16; 2] = [12, 8];
 pub const KNOWN_FRAME_HEIGHTS: [u16; 4] = [8, 11, 33, 12];
-pub const DISPLAY_OFFSET_Y: u16 = (KNOWN_FRAME_HEIGHTS[2] - DIGIT_HEIGHT) / 2;
+pub const DISPLAY_OFFSET_Y: u16 = (KNOWN_FRAME_HEIGHTS[2] - seven_segment::DIGIT_HEIGHT) / 2;
 pub const DISPLAY_OFFSET_X: u16 = DISPLAY_OFFSET_Y - 1;
-const DISPLAY_WIDTH: u16 = DIGIT_WIDTH * DIGITS_PER_DISPLAY as u16;
+const DISPLAY_WIDTH: u16 = seven_segment::DIGIT_WIDTH * seven_segment::DIGITS_PER_DISPLAY as u16;
 const CELL_LENGTH: u16 = 16;
 const FACE_LENGTH: u16 = 24;
 const FACE_OFFSET_Y: u16 = (KNOWN_FRAME_HEIGHTS[2] - FACE_LENGTH) / 2 + 1;
@@ -54,8 +49,10 @@ pub struct MainWindowGraphics {
     grid_height: minesweeper::Dim,
     scaling: texture::Scaling,
     scaling_buffer: wgpu::Buffer,
-    scaling_bind_group: Arc<wgpu::BindGroup>,
-    render_pipeline: Arc<wgpu::RenderPipeline>,
+    // Fields used to indicate that resources are in use.
+    // GPU will deallocate the corresponding resources when they are deallocated.
+    _scaling_bind_group: Arc<wgpu::BindGroup>,
+    _render_pipeline: Arc<wgpu::RenderPipeline>,
 }
 
 impl MainWindowGraphics {
@@ -99,8 +96,8 @@ impl MainWindowGraphics {
             grid_height: minesweeper_game.height,
             scaling,
             scaling_buffer,
-            scaling_bind_group,
-            render_pipeline,
+            _scaling_bind_group: scaling_bind_group,
+            _render_pipeline: render_pipeline,
         };
         let rectangles = get_main_window_instances(&result, minesweeper_game);
         result.rectangles.set_instances(rectangles);
@@ -152,17 +149,17 @@ impl MainWindowGraphics {
             self.get_tex_trans(get_cell_tex_coords(&minesweeper::CellImage::Hidden), 0, 0);
         (grid_start_index..grid_end_index).for_each(|idx| {
             self.rectangles
-                .update_tex_coord_instance(idx, tex_coord_translation)
+                .update_tex_trans_instance(idx, tex_coord_translation)
         });
     }
 
-    /// Updates all cells as described.
-    pub fn update_grid(&mut self, updates: Vec<(minesweeper::Pos, minesweeper::CellImage)>) {
+    /// Updates all cells as requested by `updates`.
+    pub fn update_grid(&mut self, updates: &[(minesweeper::Pos, minesweeper::CellImage)]) {
         updates.iter().for_each(|((row, col), cell_image)| {
             let index = 6 + 15 + 1 + (*col as usize + *row as usize * self.grid_width as usize);
-            let tex_coord_translation = self.get_tex_trans(get_cell_tex_coords(cell_image), 0, 0);
+            let tex_coord_translation = self.get_tex_trans(get_cell_tex_coords(&cell_image), 0, 0);
             self.rectangles
-                .update_tex_coord_instance(index, tex_coord_translation);
+                .update_tex_trans_instance(index, tex_coord_translation);
         });
     }
 
@@ -173,17 +170,29 @@ impl MainWindowGraphics {
             Display::Timer => true,
         };
         let updated_digits = seven_segment::get_texture_coords(val);
-        let offset = if is_timer { DIGITS_PER_DISPLAY } else { 0 };
+        let offset = if is_timer {
+            seven_segment::DIGITS_PER_DISPLAY
+        } else {
+            0
+        };
         let updated_tex_coords = updated_digits
             .into_iter()
             .map(|data| self.get_tex_trans(data, -64, 0))
             .collect::<Vec<_>>()
             .into_iter()
-            .zip(0..DIGITS_PER_DISPLAY);
+            .zip(0..seven_segment::DIGITS_PER_DISPLAY);
         for (data, idx) in updated_tex_coords {
             self.rectangles
-                .update_tex_coord_instance(15 + idx + offset, data);
+                .update_tex_trans_instance(15 + idx + offset, data);
         }
+    }
+
+    /// Updates the [Face] with the given value.
+    pub fn update_face(&mut self, face: Face) {
+        self.rectangles.update_tex_trans_instance(
+            6 + 15,
+            self.get_tex_trans(get_face_tex_coords(&face), -16, -48),
+        );
     }
 
     /// Creates a texture coordinate translation array using the given data and the data within this
@@ -281,7 +290,12 @@ pub fn convert_to_over_grid(
     pos: cgmath::Vector2<f32>,
 ) -> Option<minesweeper::Pos> {
     let to_u8_on_grid = |pos, length, offset| -> Option<u8> {
-        u8::from_f32(((pos + 1.0) / 2.0 * length as f32 - offset as f32) / CELL_LENGTH as f32)
+        let result = ((pos + 1.0) / 2.0 * length as f32 - offset as f32) / CELL_LENGTH as f32;
+        if result < 0.0 {
+            None
+        } else {
+            u8::from_f32(result)
+        }
     };
     let col = to_u8_on_grid(pos.x, get_total_pixel_width(width), KNOWN_FRAME_WIDTHS[0])?;
     let row = to_u8_on_grid(
@@ -296,7 +310,7 @@ pub fn convert_to_over_grid(
     }
 }
 
-pub fn is_face_pressed(
+pub fn is_over_face(
     width: minesweeper::Dim,
     height: minesweeper::Dim,
     pos: cgmath::Vector2<f32>,
@@ -308,12 +322,13 @@ pub fn is_face_pressed(
         + KNOWN_FRAME_HEIGHTS[1]
         + FACE_OFFSET_Y;
     let upper_bound = lower_bound + FACE_LENGTH;
-    let pos_x = u16::from_f32((pos.x + 1.0) / 2.0 * get_total_pixel_width(width) as f32).unwrap();
-    let pos_y = u16::from_f32((pos.y + 1.0) / 2.0 * get_total_pixel_height(height) as f32).unwrap();
-    pos_x > left_bound
-        && pos_x < right_bound
-        && pos_y > lower_bound
-        && pos_y < upper_bound
+    let pos_x = u16::from_f32((pos.x + 1.0) / 2.0 * get_total_pixel_width(width) as f32);
+    let pos_y = u16::from_f32((pos.y + 1.0) / 2.0 * get_total_pixel_height(height) as f32);
+    let (pos_x, pos_y) = match (pos_x, pos_y) {
+        (Some(pos_x), Some(pos_y)) => (pos_x, pos_y),
+        _ => return false,
+    };
+    pos_x > left_bound && pos_x < right_bound && pos_y > lower_bound && pos_y < upper_bound
 }
 
 /// Creates the initial [texture::Instance]s.
@@ -324,7 +339,9 @@ fn get_main_window_instances(
     let grid_width = main_window_graphics.grid_width;
     let grid_height = main_window_graphics.grid_height;
     let mut instances = Vec::with_capacity(
-        15 + DIGITS_PER_DISPLAY * 2 + 1 + (grid_width as usize * grid_height as usize),
+        15 + seven_segment::DIGITS_PER_DISPLAY * 2
+            + 1
+            + (grid_width as usize * grid_height as usize),
     );
 
     // Create instance data for the border
@@ -336,7 +353,7 @@ fn get_main_window_instances(
         KNOWN_FRAME_HEIGHTS[1],
         KNOWN_FRAME_HEIGHTS[2],
     ];
-    let mut vsx = [
+    let vsx = [
         KNOWN_FRAME_WIDTHS[0],
         CELL_LENGTH * grid_width as u16,
         KNOWN_FRAME_WIDTHS[1],
@@ -350,8 +367,8 @@ fn get_main_window_instances(
     ];
     let mut ttx = [0, KNOWN_FRAME_WIDTHS[0], 1];
     let mut tty = [0, KNOWN_FRAME_HEIGHTS[3], 1, KNOWN_FRAME_HEIGHTS[1], 1];
-    let mut tsx = [KNOWN_FRAME_WIDTHS[0], 1, KNOWN_FRAME_WIDTHS[1]];
-    let mut tsy = [
+    let tsx = [KNOWN_FRAME_WIDTHS[0], 1, KNOWN_FRAME_WIDTHS[1]];
+    let tsy = [
         KNOWN_FRAME_HEIGHTS[3],
         1,
         KNOWN_FRAME_HEIGHTS[1],
@@ -392,7 +409,7 @@ fn get_main_window_instances(
     .into_iter();
     let timer_digits = seven_segment::get_texture_coords(0).into_iter();
     let mut digits = mines_left_digits.chain(timer_digits);
-    let vertex_scale = [DIGIT_WIDTH, DIGIT_HEIGHT];
+    let vertex_scale = [seven_segment::DIGIT_WIDTH, seven_segment::DIGIT_HEIGHT];
     let y = KNOWN_FRAME_HEIGHTS[0]
         + CELL_LENGTH * grid_height as u16
         + KNOWN_FRAME_HEIGHTS[1]
@@ -402,9 +419,9 @@ fn get_main_window_instances(
         KNOWN_FRAME_WIDTHS[0] + CELL_LENGTH * grid_width as u16 - DISPLAY_OFFSET_X - DISPLAY_WIDTH,
     ];
     for left_side_x in left_side_xs.iter() {
-        for digit in 0..DIGITS_PER_DISPLAY {
+        for digit in 0..seven_segment::DIGITS_PER_DISPLAY {
             instances.push(main_window_graphics.instance_from_pixel_data(
-                [left_side_x + DIGIT_WIDTH * digit as u16, y],
+                [left_side_x + seven_segment::DIGIT_WIDTH * digit as u16, y],
                 vertex_scale,
                 digits.next().unwrap(),
                 [13, 23],
@@ -480,7 +497,8 @@ fn get_cell_tex_coords(image: &minesweeper::CellImage) -> [u16; 2] {
     }
 }
 
-enum Face {
+#[derive(PartialEq)]
+pub enum Face {
     Neutral,
     MouseDown,
     Victory,
@@ -497,6 +515,27 @@ fn get_face_tex_coords(image: &Face) -> [u16; 2] {
         Victory => [0 * FACE_LENGTH, 1 * FACE_LENGTH],
         Loss => [1 * FACE_LENGTH, 1 * FACE_LENGTH],
         Pressed => [2 * FACE_LENGTH, 1 * FACE_LENGTH],
+    }
+}
+
+/// Gets what the
+pub fn face_from_game_state(
+    pressed: bool,
+    mouse_down: bool,
+    game_state: &minesweeper::GameState,
+) -> Face {
+    use minesweeper::GameState;
+    let before_or_during = if mouse_down {
+        Face::MouseDown
+    } else {
+        Face::Neutral
+    };
+
+    match (pressed, game_state) {
+        (true, _) => Face::Pressed,
+        (_, GameState::BeforeGame | GameState::DuringGame) => before_or_during,
+        (_, GameState::Victory) => Face::Victory,
+        (_, GameState::Loss) => Face::Loss,
     }
 }
 

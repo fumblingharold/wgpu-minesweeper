@@ -78,17 +78,24 @@ struct Cell {
 /// The state of a minesweeper game. Different states allow different interactions and have
 /// different guarantees. All states permit resetting at any time, which sets the state to
 /// [GameState::BeforeGame].
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum GameState {
     /// Allows only left-clicking on the game. Guarantees the clicked [Cell] will be safe.
     /// This interaction starts the game: generates the grid if needed, places the mines,
     /// and transitions the [GameState] to [GameState::DuringGame].
     BeforeGame,
     /// Allows all interactions with the game. Ending the game transitions the [GameState] to
-    /// [GameState::AfterGame].
+    /// [GameState::Victory] or [GameState::Loss].
     DuringGame,
-    /// Prevents all interactions with the game.
-    AfterGame,
+    /// Prevent all interactions with the game.
+    Victory,
+    Loss,
+}
+
+impl GameState {
+    pub fn is_after_game(&self) -> bool {
+        matches!(self, GameState::Victory | GameState::Loss)
+    }
 }
 
 /// Represents the grid of [Cell]s. Stored as a 2D vector of [Cells] and indexed using [u8] because
@@ -220,19 +227,16 @@ impl Game {
     /// Performs the right click operations for minesweeper. This toggles [Cell]s images when
     /// hidden from [CellImage::Hidden] to [CellImage::Flagged] and other hidden values to
     /// [CellImage::Hidden].
-    pub fn right_click(&mut self, pos: Pos) -> Vec<(Pos, CellImage)> {
+    pub fn right_click(&mut self, pos: Pos) -> Option<(Pos, CellImage)> {
         assert!(
             pos.0 < self.height && pos.1 < self.width,
             "toggle_flag invalid location"
         );
         // Does nothing if the cell is shown, otherwise toggle the flag
-        if self.game_state == GameState::BeforeGame
-            || self.game_state == GameState::AfterGame
-            || self.grid[pos].image.shown()
-        {
-            Vec::new()
+        if !(self.game_state == GameState::DuringGame) || self.grid[pos].image.shown() {
+            None
         } else {
-            vec![self.toggle_tofrom_hidden(pos)]
+            Some(self.toggle_tofrom_hidden(pos))
         }
     }
 
@@ -245,7 +249,7 @@ impl Game {
             let cell = &mut self.grid[*pos];
             // If the cell is a mine that would be shown, end the game
             if cell.mine {
-                self.game_state = GameState::AfterGame;
+                self.game_state = GameState::Loss;
                 cell.image = CellImage::SelectedMine;
                 let mut result = vec![((pos.0, pos.1), CellImage::SelectedMine)];
                 for row in 0..self.height {
@@ -324,7 +328,7 @@ impl Game {
 
     /// Moves the game into the [GameState::AfterGame] state and flags all mines accordingly.
     fn handle_win(&mut self) -> Vec<(Pos, CellImage)> {
-        self.game_state = GameState::AfterGame;
+        self.game_state = GameState::Victory;
         let mut result = Vec::new();
         for row in 0..self.height {
             for col in 0..self.width {
@@ -338,6 +342,15 @@ impl Game {
         }
         self.flags = self.total_mines;
         result
+    }
+
+    /// Returns the [CellImage] of the [Cell] at the given [Pos].
+    pub fn get_image_at(&self, pos: Pos) -> CellImage {
+        if self.game_state == GameState::BeforeGame {
+            CellImage::Hidden
+        } else {
+            self.grid[pos].image.clone()
+        }
     }
 
     /// Returns a 2D vector of [CellImage]s matching up with each [Cell]'s texture.
