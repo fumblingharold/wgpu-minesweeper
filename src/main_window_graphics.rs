@@ -17,6 +17,14 @@ const DISPLAY_WIDTH: u16 = seven_segment::DIGIT_WIDTH * seven_segment::DIGITS_PE
 const CELL_LENGTH: u16 = 16;
 const FACE_LENGTH: u16 = 24;
 const FACE_OFFSET_Y: u16 = (KNOWN_FRAME_HEIGHTS[2] - FACE_LENGTH) / 2 + 1;
+const BORDER_INDEX_OFFSET: usize = 0;
+const DISPLAY_INDEX_OFFSET: usize = 15 + BORDER_INDEX_OFFSET;
+const FACE_INDEX_OFFSET: usize = 6 + DISPLAY_INDEX_OFFSET;
+const GRID_INDEX_OFFSET: usize = 1 + FACE_INDEX_OFFSET;
+const BORDER_ATLAS_OFFSET: [f32; 2] = [0.0, -93.0];
+const DISPLAY_ATLAS_OFFSET: [f32; 2] = [-64.0, 0.0];
+const FACE_ATLAS_OFFSET: [f32; 2] = [0.0, -69.0];
+const GRID_ATLAS_OFFSET: [f32; 2] = [0.0, 0.0];
 
 /// Vertex indices for a square with the above vertices.
 const SQUARE_INDICES: &[u16] = &[0, 2, 1, 1, 2, 3];
@@ -143,11 +151,12 @@ impl MainWindowGraphics {
     /// Resets all cells in the grid to be hidden.
     pub fn reset_grid(&mut self) {
         let num_cells = self.grid_width as usize * self.grid_height as usize;
-        let grid_start_index = 6 + 15 + 1;
-        let grid_end_index = grid_start_index + num_cells;
-        let tex_coord_translation =
-            self.get_tex_trans(get_cell_tex_coords(&minesweeper::CellImage::Hidden), 0, 0);
-        (grid_start_index..grid_end_index).for_each(|idx| {
+        let grid_end_index = GRID_INDEX_OFFSET + num_cells;
+        let tex_coord_translation = self.get_tex_trans(
+            get_cell_tex_coords(&minesweeper::CellImage::Hidden),
+            GRID_ATLAS_OFFSET,
+        );
+        (GRID_INDEX_OFFSET..grid_end_index).for_each(|idx| {
             self.rectangles
                 .update_tex_trans_instance(idx, tex_coord_translation)
         });
@@ -156,8 +165,10 @@ impl MainWindowGraphics {
     /// Updates all cells as requested by `updates`.
     pub fn update_grid(&mut self, updates: &[(minesweeper::Pos, minesweeper::CellImage)]) {
         updates.iter().for_each(|((row, col), cell_image)| {
-            let index = 6 + 15 + 1 + (*col as usize + *row as usize * self.grid_width as usize);
-            let tex_coord_translation = self.get_tex_trans(get_cell_tex_coords(&cell_image), 0, 0);
+            let index =
+                GRID_INDEX_OFFSET + (*col as usize + *row as usize * self.grid_width as usize);
+            let tex_coord_translation =
+                self.get_tex_trans(get_cell_tex_coords(&cell_image), GRID_ATLAS_OFFSET);
             self.rectangles
                 .update_tex_trans_instance(index, tex_coord_translation);
         });
@@ -177,29 +188,28 @@ impl MainWindowGraphics {
         };
         let updated_tex_coords = updated_digits
             .into_iter()
-            .map(|data| self.get_tex_trans(data, -64, 0))
+            .map(|data| self.get_tex_trans(data, DISPLAY_ATLAS_OFFSET))
             .collect::<Vec<_>>()
             .into_iter()
             .zip(0..seven_segment::DIGITS_PER_DISPLAY);
         for (data, idx) in updated_tex_coords {
             self.rectangles
-                .update_tex_trans_instance(15 + idx + offset, data);
+                .update_tex_trans_instance(DISPLAY_INDEX_OFFSET + idx + offset, data);
         }
     }
 
     /// Updates the [Face] with the given value.
     pub fn update_face(&mut self, face: Face) {
         self.rectangles.update_tex_trans_instance(
-            6 + 15,
-            self.get_tex_trans(get_face_tex_coords(&face), -16, -48),
+            FACE_INDEX_OFFSET,
+            self.get_tex_trans(get_face_tex_coords(&face), FACE_ATLAS_OFFSET),
         );
     }
 
     /// Creates a texture coordinate translation array using the given data and the data within this
     /// [MainWindowGraphics].
-    fn get_tex_trans(&self, tex_translation: [u16; 2], x_offset: i32, y_offset: i32) -> [f32; 2] {
+    fn get_tex_trans(&self, tex_translation: [u16; 2], offset: [f32; 2]) -> [f32; 2] {
         let tex_coord_translation = [tex_translation[0] as f32, tex_translation[1] as f32];
-        let offset = [x_offset as f32, y_offset as f32];
         let scaling = [
             self.texture_renderer.atlas_width() as f32,
             self.texture_renderer.atlas_height() as f32,
@@ -222,8 +232,7 @@ impl MainWindowGraphics {
         vertex_scale: [u16; 2],
         tex_coord_translation: [u16; 2],
         tex_coord_scale: [u16; 2],
-        x_offset: u16,
-        y_offset: u16,
+        offset: [f32; 2],
     ) -> texture::Instance {
         assert!(
             tex_coord_translation[0] + tex_coord_scale[0] - 1 < self.texture_renderer.atlas_width()
@@ -242,7 +251,7 @@ impl MainWindowGraphics {
             get_total_pixel_height(self.grid_height) / 2,
         ]);
         let vertex_scaling_offset = [0.0, 0.0];
-        let tex_coord_translation_offset = [-1.0 * x_offset as f32, -1.0 * y_offset as f32];
+        let tex_coord_translation_offset = offset;
         let tex_coord_scaling_offset = [0.002, 0.002];
         let vertex_data_scaling = vertex_translation_offset;
         let tex_coord_scaling = to_f32([
@@ -338,11 +347,8 @@ fn get_main_window_instances(
 ) -> Vec<texture::Instance> {
     let grid_width = main_window_graphics.grid_width;
     let grid_height = main_window_graphics.grid_height;
-    let mut instances = Vec::with_capacity(
-        15 + seven_segment::DIGITS_PER_DISPLAY * 2
-            + 1
-            + (grid_width as usize * grid_height as usize),
-    );
+    let mut instances =
+        Vec::with_capacity(GRID_INDEX_OFFSET + (grid_width as usize * grid_height as usize));
 
     // Create instance data for the border
     let mut vtx = [0, KNOWN_FRAME_WIDTHS[0], CELL_LENGTH * grid_width as u16];
@@ -396,8 +402,7 @@ fn get_main_window_instances(
                 [*vsx, *vsy],
                 [*ttx, *tty],
                 [*tsx, *tsy],
-                95,
-                69,
+                BORDER_ATLAS_OFFSET,
             ));
         }
     }
@@ -425,8 +430,7 @@ fn get_main_window_instances(
                 vertex_scale,
                 digits.next().unwrap(),
                 [13, 23],
-                64,
-                0,
+                DISPLAY_ATLAS_OFFSET,
             ));
         }
     }
@@ -443,8 +447,7 @@ fn get_main_window_instances(
         [FACE_LENGTH, FACE_LENGTH],
         get_face_tex_coords(&Face::Neutral),
         [FACE_LENGTH, FACE_LENGTH],
-        16,
-        48,
+        FACE_ATLAS_OFFSET,
     ));
 
     // Create instance data for grid
@@ -464,8 +467,7 @@ fn get_main_window_instances(
                             [CELL_LENGTH, CELL_LENGTH],
                             get_cell_tex_coords(&image),
                             [CELL_LENGTH, CELL_LENGTH],
-                            0,
-                            0,
+                            GRID_ATLAS_OFFSET,
                         )
                     })
             })
@@ -491,9 +493,9 @@ fn get_cell_tex_coords(image: &minesweeper::CellImage) -> [u16; 2] {
         Mine => [1 * CELL_LENGTH, 2 * CELL_LENGTH],
         WronglyFlagged => [2 * CELL_LENGTH, 2 * CELL_LENGTH],
         SelectedMine => [3 * CELL_LENGTH, 2 * CELL_LENGTH],
-        Hidden => [0, 3 * CELL_LENGTH],
-        Flagged => [0, 4 * CELL_LENGTH],
-        QuestionMarked => [0, 5 * CELL_LENGTH],
+        Hidden => [0 * CELL_LENGTH, 3 * CELL_LENGTH],
+        Flagged => [1 * CELL_LENGTH, 3 * CELL_LENGTH],
+        QuestionMarked => [2 * CELL_LENGTH, 3 * CELL_LENGTH],
     }
 }
 
@@ -510,11 +512,11 @@ pub enum Face {
 fn get_face_tex_coords(image: &Face) -> [u16; 2] {
     use Face::*;
     match image {
-        Neutral => [0 * FACE_LENGTH, 0 * FACE_LENGTH],
-        MouseDown => [1 * FACE_LENGTH, 0 * FACE_LENGTH],
-        Victory => [0 * FACE_LENGTH, 1 * FACE_LENGTH],
-        Loss => [1 * FACE_LENGTH, 1 * FACE_LENGTH],
-        Pressed => [2 * FACE_LENGTH, 1 * FACE_LENGTH],
+        Neutral => [0 * FACE_LENGTH, 0],
+        MouseDown => [1 * FACE_LENGTH, 0],
+        Victory => [2 * FACE_LENGTH, 0],
+        Loss => [3 * FACE_LENGTH, 0],
+        Pressed => [4 * FACE_LENGTH, 0],
     }
 }
 
