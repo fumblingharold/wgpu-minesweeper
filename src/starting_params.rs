@@ -52,12 +52,13 @@ fn wrap_error_msg(msg: String) -> String {
     )
 }
 
-/// Parses the given arg and returns the result. Should arg be none or parsing fail, returns an 
+/// Parses the given arg and returns the result. Should arg be none or parsing fail, returns an
 /// [Err] wrapping a string message.
 /// That error message is generated using the given flag.
 fn to_val<T: FromStr>(flag: &str, arg: Option<String>) -> Result<T, String> {
     if let Some(arg) = arg {
-        arg.parse().map_err(|_| format!("invalid value for flag {}: {}", flag, arg))
+        arg.parse()
+            .map_err(|_| format!("invalid value for flag {}: {}", flag, arg))
     } else {
         Err(format!("missing value for flag {}", flag))
     }
@@ -83,6 +84,14 @@ pub fn get_starting_params() -> Result<(Dim, Dim, Count), String> {
             "--help" => return Err(HELP_TEXT.to_string()),
             _ => return Err(wrap_error_msg(format!("unknown argument: {}", arg))),
         }
+    }
+
+    // Return error if grid has too many mines
+    if (width as Count * height as Count) <= num_mines as Count {
+        return Err(wrap_error_msg(format!(
+            "num cells (width * height) less than or equal to num mines: {} ({width} * {height}) <= {num_mines}",
+            width * height
+        )));
     }
 
     Ok((width, height, num_mines))
