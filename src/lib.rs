@@ -1,5 +1,6 @@
 mod main_window_graphics;
 mod minesweeper;
+mod starting_params;
 
 use pollster::FutureExt;
 use std::sync::Arc;
@@ -17,10 +18,6 @@ use winit::{
         WindowId,
     },
 };
-
-const DEFAULT_WIDTH: minesweeper::Dim = 10;
-const DEFAULT_HEIGHT: minesweeper::Dim = 10;
-const DEFAULT_MINES: minesweeper::Count = 20;
 
 /// The State of a  Minesweeper game process.
 struct State<'a> {
@@ -596,10 +593,22 @@ impl<'a> ApplicationHandler for MinesweeperApp<'a> {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
 pub async fn run() {
     env_logger::init();
+
+    // Get starting game params
+    let result = starting_params::get_starting_params();
+
+    // In case of error getting params, print error and return
+    if let Err(message) = result {
+        println!("{}", message);
+        return;
+    }
+
+    // Destructure starting params and start game
+    let (width, height, num_mines) = result.unwrap();
     let event_loop = event_loop::EventLoop::new().unwrap();
     event_loop
         .run_app(&mut MinesweeperApp::Suspended(Some(
-            minesweeper::Game::new(DEFAULT_WIDTH, DEFAULT_HEIGHT, DEFAULT_MINES),
+            minesweeper::Game::new(width, height, num_mines),
         )))
         .expect("Event loop crashed!");
 }
