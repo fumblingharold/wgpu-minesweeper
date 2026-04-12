@@ -1,8 +1,6 @@
-use crate::{
-    minesweeper::{
-        Count,
-        Dim,
-    },
+use crate::minesweeper::{
+    Count,
+    Dim,
 };
 use std::{
     env,
@@ -84,10 +82,28 @@ pub fn get_starting_params() -> Result<(Dim, Dim, Count), String> {
         }
     }
 
+    // Return error if any value is too small
+    if width <= 7 {
+        return Err(wrap_error_msg(format!(
+            "width must be greater than 7: {}",
+            width
+        )));
+    } else if height == 0 {
+        return Err(wrap_error_msg(format!(
+            "height must be greater than 0: {}",
+            height
+        )));
+    } else if num_mines == 0 {
+        return Err(wrap_error_msg(format!(
+            "num mines must be greater than 0: {}",
+            num_mines
+        )));
+    }
+
     // Return error if grid has too many mines
     if (width as Count * height as Count) <= num_mines as Count {
         return Err(wrap_error_msg(format!(
-            "num cells (width * height) less than or equal to num mines: {} ({width} * {height}) <= {num_mines}",
+            "num cells (width * height) must be greater than num mines: {} ({width} * {height}) > {num_mines}",
             width * height
         )));
     }
