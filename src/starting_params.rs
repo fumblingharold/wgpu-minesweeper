@@ -1,5 +1,4 @@
 use crate::{
-    minesweeper,
     minesweeper::{
         Count,
         Dim,
@@ -7,7 +6,6 @@ use crate::{
 };
 use std::{
     env,
-    error::Error,
     str::FromStr,
 };
 
