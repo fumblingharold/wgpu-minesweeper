@@ -255,7 +255,7 @@ impl Game {
                 for row in 0..self.height {
                     for col in 0..self.width {
                         let cell = &mut self.grid[(row, col)];
-                        if cell.mine && cell.image == CellImage::Hidden {
+                        if cell.mine && matches!(cell.image, CellImage::Hidden | CellImage::QuestionMarked) {
                             cell.image = CellImage::Mine;
                             result.push(((row, col), cell.image.clone()));
                         } else if !cell.mine && cell.image == CellImage::Flagged {
