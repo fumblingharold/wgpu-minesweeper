@@ -230,7 +230,8 @@ impl Game {
     pub fn right_click(&mut self, pos: Pos) -> Option<(Pos, CellImage)> {
         assert!(
             pos.0 < self.height && pos.1 < self.width,
-            "toggle_flag invalid location"
+            "toggle_flag invalid location: {:?}",
+            pos
         );
         // Does nothing if the cell is shown, otherwise toggle the flag
         if !(self.game_state == GameState::DuringGame) || self.grid[pos].image.shown() {
@@ -255,7 +256,9 @@ impl Game {
                 for row in 0..self.height {
                     for col in 0..self.width {
                         let cell = &mut self.grid[(row, col)];
-                        if cell.mine && matches!(cell.image, CellImage::Hidden | CellImage::QuestionMarked) {
+                        if cell.mine
+                            && matches!(cell.image, CellImage::Hidden | CellImage::QuestionMarked)
+                        {
                             cell.image = CellImage::Mine;
                             result.push(((row, col), cell.image.clone()));
                         } else if !cell.mine && cell.image == CellImage::Flagged {
@@ -305,8 +308,9 @@ impl Game {
     /// [CellImage::Flagged] if it is the given [CellImage].
     fn toggle_tofrom_given(&mut self, pos: Pos, given: CellImage) -> (Pos, CellImage) {
         assert!(
-            pos.1 < self.height && pos.0 < self.width,
-            "invalid location"
+            pos.0 < self.height && pos.1 < self.width,
+            "invalid location: {:?}",
+            pos
         );
         //let mut cell = &mut self.grid[row as usize][col as usize];
         let cell = &mut self.grid[pos];
