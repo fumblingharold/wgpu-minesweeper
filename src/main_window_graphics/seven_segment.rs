@@ -1,4 +1,5 @@
 use std::cmp::PartialEq;
+use std::mem;
 
 pub const DIGIT_WIDTH: u16 = 13;
 pub const DIGIT_HEIGHT: u16 = 23;
@@ -15,20 +16,21 @@ pub enum Display {
 ///
 /// A seven-segment display can, of course, display more than these, but this is all that's needed
 /// for minesweeper.
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
+#[repr(u8)]
 enum Image {
-    Blank,
-    Zero,
-    One,
-    Two,
-    Three,
-    Four,
-    Five,
-    Six,
-    Seven,
-    Eight,
-    Nine,
-    Negative,
+    Zero = 0,
+    One = 1,
+    Two = 2,
+    Three = 3,
+    Four = 4,
+    Five = 5,
+    Six = 6,
+    Seven = 7,
+    Eight = 8,
+    Nine = 9,
+    Blank = 10,
+    Negative = 11,
 }
 
 impl Image {
@@ -36,39 +38,19 @@ impl Image {
     ///
     /// Panics if given an invalid number.
     fn from_value(value: u8) -> Image {
-        use Image::*;
-        match value {
-            0 => Zero,
-            1 => One,
-            2 => Two,
-            3 => Three,
-            4 => Four,
-            5 => Five,
-            6 => Six,
-            7 => Seven,
-            8 => Eight,
-            9 => Nine,
-            _ => panic!("Invalid number: {}", value),
+        if value > 9 {
+            panic!("Invalid number: {}", value);
         }
+        // SAFETY: The value is in the range 0-9, so it can be cast to Image.
+        unsafe { mem::transmute(value) }
     }
 
     /// Gives the texture coordinates
-    fn get_tex_coords(image: &Image) -> [u16; 2] {
-        use Image::*;
-        match image {
-            Zero => [0 * DIGIT_WIDTH, 0 * DIGIT_HEIGHT],
-            One => [1 * DIGIT_WIDTH, 0 * DIGIT_HEIGHT],
-            Two => [2 * DIGIT_WIDTH, 0 * DIGIT_HEIGHT],
-            Three => [3 * DIGIT_WIDTH, 0 * DIGIT_HEIGHT],
-            Four => [0 * DIGIT_WIDTH, 1 * DIGIT_HEIGHT],
-            Five => [1 * DIGIT_WIDTH, 1 * DIGIT_HEIGHT],
-            Six => [2 * DIGIT_WIDTH, 1 * DIGIT_HEIGHT],
-            Seven => [3 * DIGIT_WIDTH, 1 * DIGIT_HEIGHT],
-            Eight => [0 * DIGIT_WIDTH, 2 * DIGIT_HEIGHT],
-            Nine => [1 * DIGIT_WIDTH, 2 * DIGIT_HEIGHT],
-            Blank => [2 * DIGIT_WIDTH, 2 * DIGIT_HEIGHT],
-            Negative => [3 * DIGIT_WIDTH, 2 * DIGIT_HEIGHT],
-        }
+    fn get_tex_coords(image: Image) -> [u16; 2] {
+        [
+            (image as u16 & 0b11) * DIGIT_WIDTH,
+            (image as u16 >> 2) * DIGIT_HEIGHT,
+        ]
     }
 }
 
@@ -109,7 +91,7 @@ fn get_images(val: i32) -> [Image; 3] {
 pub fn get_texture_coords(val: i32) -> [[u16; 2]; 3] {
     let mut result = get_images(val)
         .into_iter()
-        .map(|image| Image::get_tex_coords(&image));
+        .map(|image| Image::get_tex_coords(image));
     [
         result.next().unwrap(),
         result.next().unwrap(),
