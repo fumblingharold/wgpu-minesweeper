@@ -1,10 +1,7 @@
-use rand::Rng;
+use rand::RngExt;
 use std::{
     cmp::PartialEq,
-    ops::{
-        Index,
-        IndexMut,
-    },
+    ops::{Index, IndexMut},
 };
 
 pub type Row = u8;

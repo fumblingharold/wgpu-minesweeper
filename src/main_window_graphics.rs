@@ -634,8 +634,9 @@ fn make_render_pipeline(
 
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
-        bind_group_layouts: &[texture_layout, scaling_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(texture_layout), Some(scaling_layout)],
+        //push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -644,7 +645,10 @@ fn make_render_pipeline(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
-            buffers: &[texture::Vertex::desc(), texture::Instance::desc()],
+            buffers: &[
+                Option::from(texture::Vertex::desc()),
+                Option::from(texture::Instance::desc()),
+            ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
@@ -672,7 +676,7 @@ fn make_render_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
-        multiview: None,
         cache: None,
+        multiview_mask: None,
     })
 }
