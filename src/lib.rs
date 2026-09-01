@@ -4,10 +4,14 @@ mod starting_params;
 
 use pollster::FutureExt;
 use std::sync::Arc;
+use wgpu::{
+    BackendOptions, SurfaceTarget, SurfaceTargetUnsafe,
+    rwh::{DisplayHandle, HasDisplayHandle},
+};
 use winit::{
     application::ApplicationHandler,
     event::*,
-    event_loop,
+    event_loop::{self, OwnedDisplayHandle},
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowAttributes, WindowId},
 };
@@ -35,21 +39,20 @@ struct State<'a> {
 impl<'a> State<'a> {
     /// Creates a new State.
     /// It is async as creating some of the wgpu types requires async code.
-    fn new(window: Arc<Window>, minesweeper_game: minesweeper::Game) -> Self {
+    fn new(
+        window: Arc<Window>,
+        display_handle: OwnedDisplayHandle,
+        minesweeper_game: minesweeper::Game,
+    ) -> Self {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
-        // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            #[cfg(not(target_arch = "wasm32"))]
-            backends: wgpu::Backends::PRIMARY,
-            flags: Default::default(),
-            memory_budget_thresholds: Default::default(),
-            backend_options: Default::default(),
-            #[cfg(target_arch = "wasm32")]
-            backends: wgpu::Backends::GL,
-
-            display: None,
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            backend_options: wgpu::BackendOptions::from_env_or_default(),
+            display: Some(Box::new(display_handle)),
         });
 
         // Handle for the window
@@ -58,7 +61,7 @@ impl<'a> State<'a> {
         // Adapter for instance
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
+                power_preference: wgpu::PowerPreference::None,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
                 apply_limit_buckets: false,
@@ -545,7 +548,14 @@ impl<'a> ApplicationHandler for MinesweeperApp<'a> {
                         .unwrap(),
                 );
                 window.set_title("Minesweeper");
-                std::mem::swap(self, &mut MinesweeperApp::Running(State::new(window, game)));
+                std::mem::swap(
+                    self,
+                    &mut MinesweeperApp::Running(State::new(
+                        window,
+                        event_loop.owned_display_handle(),
+                        game,
+                    )),
+                );
             }
         }
     }

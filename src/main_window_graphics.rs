@@ -1,4 +1,5 @@
 use cgmath::num_traits::FromPrimitive;
+use cgmath::num_traits::float::FloatCore;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -251,8 +252,8 @@ impl MainWindowGraphics {
             get_total_pixel_height(self.grid_height) / 2,
         ]);
         let vertex_scaling_offset = [0.0, 0.0];
-        let tex_coord_translation_offset = offset;
-        let tex_coord_scaling_offset = [0.002, 0.002];
+        let tex_coord_translation_offset = [offset[0], offset[1]];
+        let tex_coord_scaling_offset = [0.0, 0.0];
         let vertex_data_scaling = vertex_translation_offset;
         let tex_coord_scaling = to_f32([
             self.texture_renderer.atlas_width(),
