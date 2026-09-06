@@ -4,19 +4,16 @@ mod starting_params;
 
 use pollster::FutureExt;
 use std::sync::Arc;
+use wgpu::{
+    BackendOptions, SurfaceTarget, SurfaceTargetUnsafe,
+    rwh::{DisplayHandle, HasDisplayHandle},
+};
 use winit::{
     application::ApplicationHandler,
     event::*,
-    event_loop,
-    keyboard::{
-        KeyCode,
-        PhysicalKey,
-    },
-    window::{
-        Window,
-        WindowAttributes,
-        WindowId,
-    },
+    event_loop::{self, OwnedDisplayHandle},
+    keyboard::{KeyCode, PhysicalKey},
+    window::{Window, WindowAttributes, WindowId},
 };
 
 /// The State of a  Minesweeper game process.
@@ -35,22 +32,27 @@ struct State<'a> {
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
     window: Arc<Window>,
+
+    instance: wgpu::Instance,
 }
 
 impl<'a> State<'a> {
     /// Creates a new State.
     /// It is async as creating some of the wgpu types requires async code.
-    fn new(window: Arc<Window>, minesweeper_game: minesweeper::Game) -> Self {
+    fn new(
+        window: Arc<Window>,
+        display_handle: OwnedDisplayHandle,
+        minesweeper_game: minesweeper::Game,
+    ) -> Self {
         let size = window.inner_size();
 
         // The instance is a handle to our GPU
-        // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            #[cfg(not(target_arch = "wasm32"))]
-            backends: wgpu::Backends::PRIMARY,
-            #[cfg(target_arch = "wasm32")]
-            backends: wgpu::Backends::GL,
-            ..Default::default()
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::all(),
+            flags: wgpu::InstanceFlags::default(),
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
+            backend_options: wgpu::BackendOptions::from_env_or_default(),
+            display: Some(Box::new(display_handle)),
         });
 
         // Handle for the window
@@ -59,9 +61,10 @@ impl<'a> State<'a> {
         // Adapter for instance
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::default(),
+                power_preference: wgpu::PowerPreference::None,
                 compatible_surface: Some(&surface),
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .block_on()
             .unwrap();
@@ -80,6 +83,7 @@ impl<'a> State<'a> {
                 label: None,
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
+                experimental_features: Default::default(),
             })
             .block_on()
             .unwrap();
@@ -96,6 +100,7 @@ impl<'a> State<'a> {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
+            color_space: Default::default(),
             width: size.width,
             height: size.height,
             present_mode: surface_caps.present_modes[0],
@@ -125,6 +130,7 @@ impl<'a> State<'a> {
             left_mouse_down: false,
             game: minesweeper_game,
             game_start_time: std::time::Instant::now(),
+            instance,
         }
     }
 
@@ -308,11 +314,9 @@ impl<'a> State<'a> {
         let face_pressed =
             main_window_graphics::is_over_face(self.game.width, self.game.height, self.cursor_pos);
 
-        if let Some(pos) = grid_pos { // Try clicking cell on grid
-            use minesweeper::{
-                CellImage,
-                GameState,
-            };
+        if let Some(pos) = grid_pos {
+            // Try clicking cell on grid
+            use minesweeper::{CellImage, GameState};
 
             // Start game if before game
             // Set start time to now and set control flow to send an event in 1 second to update the
@@ -338,13 +342,17 @@ impl<'a> State<'a> {
             // If the update was just a change between flagged and question marked, update mines
             // unflagged. It is an invariant that flagged <-> question marked will be the only
             // update when they happen.
-            if updates.len() == 1 && let CellImage::Flagged | CellImage::QuestionMarked = updates[0].1 {
+            if updates.len() == 1
+                && let CellImage::Flagged | CellImage::QuestionMarked = updates[0].1
+            {
                 self.update_display(main_window_graphics::Display::MinesUnflagged);
             }
 
             // If the game was ended by this click, update the mines unflagged display and print the
             // time.
-            if !updates.is_empty() && let GameState::Victory = self.game.game_state {
+            if !updates.is_empty()
+                && let GameState::Victory = self.game.game_state
+            {
                 self.update_display(main_window_graphics::Display::MinesUnflagged);
                 let game_duration_ms = self.game_start_time.elapsed().as_millis();
                 let game_duration_seconds = game_duration_ms / 1000;
@@ -354,7 +362,8 @@ impl<'a> State<'a> {
                     game_duration_ms % 1000
                 );
             }
-        } else if face_pressed { // Press face
+        } else if face_pressed {
+            // Press face
             // Reset "everything"
             self.game.reset();
             self.main_window_graphics.reset_grid();
@@ -425,10 +434,43 @@ impl<'a> State<'a> {
     }
 
     /// Render the game to the window.
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
+    fn render(&mut self) {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                drop(texture);
+                self.surface.configure(&self.device, &self.config);
+                self.window.request_redraw();
+                log::warn!("Surface suboptimal");
+                return;
+            }
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                self.window.request_redraw();
+                log::warn!("Surface occluded");
+                return;
+            }
+            wgpu::CurrentSurfaceTexture::Timeout => {
+                self.window.request_redraw();
+                log::warn!("Surface timeout");
+                return;
+            }
+            wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface = self.instance.create_surface(self.window.clone()).unwrap();
+                log::warn!("Lost surface, recreating it");
+                return;
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                unreachable!("No error scope registered, so validation errors will panic")
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&self.device, &self.config);
+                self.window.request_redraw();
+                log::warn!("Surface outdated");
+                return;
+            }
+        };
 
-        let view = output
+        let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -453,6 +495,7 @@ impl<'a> State<'a> {
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
                 timestamp_writes: None,
+                multiview_mask: None,
             });
 
             self.main_window_graphics
@@ -460,9 +503,7 @@ impl<'a> State<'a> {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-
-        Ok(())
+        self.queue.present(frame);
     }
 }
 
@@ -507,7 +548,14 @@ impl<'a> ApplicationHandler for MinesweeperApp<'a> {
                         .unwrap(),
                 );
                 window.set_title("Minesweeper");
-                std::mem::swap(self, &mut MinesweeperApp::Running(State::new(window, game)));
+                std::mem::swap(
+                    self,
+                    &mut MinesweeperApp::Running(State::new(
+                        window,
+                        event_loop.owned_display_handle(),
+                        game,
+                    )),
+                );
             }
         }
     }
@@ -528,21 +576,7 @@ impl<'a> ApplicationHandler for MinesweeperApp<'a> {
         if window_id == state.window.id() {
             if !state.input(&event, event_loop) {
                 match event {
-                    WindowEvent::RedrawRequested => match state.render() {
-                        Ok(_) => {}
-                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                            state.resize(state.size);
-                        }
-                        Err(wgpu::SurfaceError::Timeout) => log::warn!("Surface timeout"),
-                        Err(wgpu::SurfaceError::OutOfMemory) => {
-                            log::error!("Out of memory");
-                            event_loop.exit();
-                        }
-                        Err(wgpu::SurfaceError::Other) => {
-                            log::error!("Other error (God knows)");
-                            event_loop.exit();
-                        }
-                    },
+                    WindowEvent::RedrawRequested => state.render(),
                     WindowEvent::Resized(physical_size) => {
                         state.resize(physical_size);
                         state.window.request_redraw();

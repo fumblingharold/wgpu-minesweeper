@@ -1,11 +1,5 @@
-use crate::minesweeper::{
-    Count,
-    Dim,
-};
-use std::{
-    env,
-    str::FromStr,
-};
+use crate::minesweeper::{Count, Dim};
+use std::{env, str::FromStr};
 
 // Defaults for game params if left unspecified
 const DEFAULT_WIDTH: Dim = 10;

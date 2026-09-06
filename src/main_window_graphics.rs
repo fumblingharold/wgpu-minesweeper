@@ -1,4 +1,5 @@
 use cgmath::num_traits::FromPrimitive;
+use cgmath::num_traits::float::FloatCore;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -251,8 +252,8 @@ impl MainWindowGraphics {
             get_total_pixel_height(self.grid_height) / 2,
         ]);
         let vertex_scaling_offset = [0.0, 0.0];
-        let tex_coord_translation_offset = offset;
-        let tex_coord_scaling_offset = [0.002, 0.002];
+        let tex_coord_translation_offset = [offset[0], offset[1]];
+        let tex_coord_scaling_offset = [0.0, 0.0];
         let vertex_data_scaling = vertex_translation_offset;
         let tex_coord_scaling = to_f32([
             self.texture_renderer.atlas_width(),
@@ -634,8 +635,9 @@ fn make_render_pipeline(
 
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
-        bind_group_layouts: &[texture_layout, scaling_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(texture_layout), Some(scaling_layout)],
+        //push_constant_ranges: &[],
+        immediate_size: 0,
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -644,7 +646,10 @@ fn make_render_pipeline(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: Some("vs_main"),
-            buffers: &[texture::Vertex::desc(), texture::Instance::desc()],
+            buffers: &[
+                Option::from(texture::Vertex::desc()),
+                Option::from(texture::Instance::desc()),
+            ],
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         },
         fragment: Some(wgpu::FragmentState {
@@ -672,7 +677,7 @@ fn make_render_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
-        multiview: None,
         cache: None,
+        multiview_mask: None,
     })
 }
